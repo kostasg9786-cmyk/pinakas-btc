@@ -16,15 +16,15 @@ import requests
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(ROOT, "data.json")
 HIST = os.path.join(ROOT, "history.csv")
-UA = {"User-Agent": "Mozilla/5.0 (pinakas-btc)"}
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
 LOG = []
 
 def log(m, ok=True):
     LOG.append(("✓ " if ok else "✗ ") + m)
 
-def get(url, label, text=False):
+def get(url, label, text=False, timeout=25):
     try:
-        r = requests.get(url, headers=UA, timeout=25)
+        r = requests.get(url, headers=UA, timeout=timeout)
         r.raise_for_status()
         log(label)
         return r.text if text else r.json()
@@ -52,7 +52,7 @@ READINGS = [
     ("c3", "Γ", "Γ3 Skew 30 ημερών (call−put)", "μον.", "+1 ≥+3 · −1 ≤−5", band(-5, 3), 1),
     ("c4", "Γ", "Γ4 Λόγος OI put/call", "", "+1 ≤0,5 · −1 ≥0,9", band_inv(0.5, 0.9), 2),
     ("c5", "Γ", "Γ5 Basis τριμηνιαίου, ετησιοποιημένο", "%", "+1 ≥12 · −1 <3", band(3, 12, True), 1),
-    ("f1", "Σ", "OI σε BTC, 48 ώρες", "%", "Ξέπλυμα αν ≤ −15", None, 1),
+    ("f1", "Σ", "OI σε BTC, 2 ημέρες", "%", "Ξέπλυμα αν ≤ −15", None, 1),
     ("f2", "Σ", "IV 7 ημερών", "%", "Γεγονός αν IV7 ≥ IV30 + 5", None, 1),
     ("f3", "Σ", "IV 30 ημερών", "%", "", None, 1),
     ("d2", "Δ", "Δ2 Premium ΗΠΑ έναντι offshore", "%", "+1 >0 · −1 <0", lambda x: 1 if x > 0 else (-1 if x < 0 else 0), 3),
@@ -84,75 +84,40 @@ def setv(i, val, src):
     except Exception:
         pass
 
-BIN = "https://fapi.binance.com"
-BYB = "https://api.bybit.com"
+DER = "https://www.deribit.com/api/v2/public"
 
 def derivs():
-    p = get(f"{BIN}/fapi/v1/premiumIndex?symbol=BTCUSDT", "funding (πηγή 1)")
-    if p and "lastFundingRate" in p:
-        setv("c1", float(p["lastFundingRate"]) * 3 * 365 * 100, "πηγή 1")
-    oi = get(f"{BIN}/futures/data/openInterestHist?symbol=BTCUSDT&period=1d&limit=8", "OI 7ημ (πηγή 1)")
-    if oi and len(oi) >= 2:
-        a, b = float(oi[0]["sumOpenInterest"]), float(oi[-1]["sumOpenInterest"])
-        if a > 0: setv("c2", (b / a - 1) * 100, "πηγή 1"); EXTRA["oi_level"] = b
-    oh = get(f"{BIN}/futures/data/openInterestHist?symbol=BTCUSDT&period=1h&limit=49", "OI 48ω (πηγή 1)")
-    if oh and len(oh) >= 2:
-        a, b = float(oh[0]["sumOpenInterest"]), float(oh[-1]["sumOpenInterest"])
-        if a > 0: setv("f1", (b / a - 1) * 100, "πηγή 1")
-    kl = get(f"{BIN}/fapi/v1/klines?symbol=BTCUSDT&interval=1d&limit=8", "τιμή 7ημ (πηγή 1)")
-    if kl and len(kl) >= 2:
-        p0, p1 = float(kl[0][4]), float(kl[-1][4])
-        if p0 > 0: setv("c2p", (p1 / p0 - 1) * 100, "πηγή 1"); EXTRA["price"] = p1
+    c = get("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400", "τιμή 7ημ (spot ΗΠΑ)")
+    try:
+        c = sorted(c, key=lambda x: x[0])
+        p0, p1 = float(c[-8][4]), float(c[-1][4])
+        if p0 > 0: setv("c2p", (p1 / p0 - 1) * 100, "spot ΗΠΑ"); EXTRA["price"] = p1
+    except Exception:
+        pass
+    d = get("https://api.coingecko.com/api/v3/derivatives", "funding/OI (συγκεντρωτική)")
+    if d:
+        num = den = 0.0
+        for x in d:
+            try:
+                if x.get("index_id") != "BTC" or x.get("contract_type") != "perpetual": continue
+                o = float(x.get("open_interest") or 0); fr = float(x.get("funding_rate") or 0)
+                if o > 0: num += fr * o; den += o
+            except Exception:
+                continue
+        if den > 0:
+            setv("c1", (num / den) * 3 * 365, "συγκεντρωτική")
+            if EXTRA["price"]: EXTRA["oi_level"] = den / EXTRA["price"]
     if V["c1"] is None or EXTRA["oi_level"] is None:
-        t = get(f"{BYB}/v5/market/tickers?category=linear&symbol=BTCUSDT", "funding/OI (πηγή 2)")
+        t = get(f"{DER}/ticker?instrument_name=BTC-PERPETUAL", "funding/OI (αγορά options)")
         try:
-            row = t["result"]["list"][0]
-            if V["c1"] is None: setv("c1", float(row["fundingRate"]) * 3 * 365 * 100, "πηγή 2")
-            if EXTRA["oi_level"] is None: EXTRA["oi_level"] = float(row["openInterest"])
-            if EXTRA["price"] is None: EXTRA["price"] = float(row["lastPrice"])
+            r = t["result"]
+            if V["c1"] is None and r.get("funding_8h") is not None: setv("c1", float(r["funding_8h"]) * 3 * 365 * 100, "αγορά options")
+            if EXTRA["oi_level"] is None and r.get("open_interest") and r.get("index_price"):
+                EXTRA["oi_level"] = float(r["open_interest"]) / float(r["index_price"])
+            if EXTRA["price"] is None and r.get("index_price"): EXTRA["price"] = float(r["index_price"])
         except Exception:
             pass
-    if V["c2"] is None:
-        h = get(f"{BYB}/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=1d&limit=8", "OI 7ημ (πηγή 2)")
-        try:
-            lst = h["result"]["list"]
-            a, b = float(lst[-1]["openInterest"]), float(lst[0]["openInterest"])
-            if a > 0: setv("c2", (b / a - 1) * 100, "πηγή 2")
-        except Exception:
-            pass
-    if V["f1"] is None:
-        h = get(f"{BYB}/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=1h&limit=49", "OI 48ω (πηγή 2)")
-        try:
-            lst = h["result"]["list"]
-            a, b = float(lst[-1]["openInterest"]), float(lst[0]["openInterest"])
-            if a > 0: setv("f1", (b / a - 1) * 100, "πηγή 2")
-        except Exception:
-            pass
-    if V["c2p"] is None:
-        k = get(f"{BYB}/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=8", "τιμή 7ημ (πηγή 2)")
-        try:
-            lst = k["result"]["list"]
-            p0, p1 = float(lst[-1][4]), float(lst[0][4])
-            if p0 > 0: setv("c2p", (p1 / p0 - 1) * 100, "πηγή 2"); EXTRA["price"] = p1
-        except Exception:
-            pass
-    if V["c1"] is None or EXTRA["oi_level"] is None:
-        d = get("https://api.coingecko.com/api/v3/derivatives", "funding/OI (πηγή 3, συγκεντρωτική)")
-        if d:
-            num = den = 0.0
-            for x in d:
-                try:
-                    if x.get("index_id") != "BTC" or x.get("contract_type") != "perpetual": continue
-                    o = float(x.get("open_interest") or 0); fr = float(x.get("funding_rate") or 0)
-                    if o > 0: num += fr * o; den += o
-                except Exception:
-                    continue
-            if den > 0:
-                if V["c1"] is None: setv("c1", (num / den) * 3 * 365, "πηγή 3")
-                if EXTRA["oi_level"] is None and EXTRA["price"]:
-                    EXTRA["oi_level"] = den / EXTRA["price"]
 
-DER = "https://www.deribit.com/api/v2/public"
 MON = {m: i for i, m in enumerate(["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1)}
 
 def options():
@@ -204,10 +169,12 @@ def basis():
 
 def demand():
     us = get("https://api.exchange.coinbase.com/products/BTC-USD/ticker", "spot ΗΠΑ")
-    off = get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", "spot offshore (πηγή 1)")
+    off = get("https://api-pub.bitfinex.com/v2/ticker/tBTCUSD", "spot offshore (πηγή 1)")
+    try: off = {"price": off[6]}
+    except Exception: off = None
     if not off:
-        off = get(f"{BYB}/v5/market/tickers?category=spot&symbol=BTCUSDT", "spot offshore (πηγή 2)")
-        try: off = {"price": off["result"]["list"][0]["lastPrice"]}
+        o2 = get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", "spot offshore (πηγή 2)")
+        try: off = {"price": o2["data"][0]["last"]}
         except Exception: off = None
     try:
         setv("d2", (float(us["price"]) / float(off["price"]) - 1) * 100, "spot")
@@ -238,7 +205,7 @@ def fred_series(code, label):
             try: out.append((dt.date.fromisoformat(o["date"]), float(o["value"])))
             except Exception: pass
     if not out:
-        t = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}", f"μακρο {label} (csv)", text=True)
+        t = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}&cosd={(dt.date.today()-dt.timedelta(days=120)).isoformat()}", f"μακρο {label} (csv)", text=True, timeout=60)
         for line in (t or "").splitlines()[1:]:
             c = line.split(",")
             try: out.append((dt.date.fromisoformat(c[0]), float(c[1])))
@@ -378,9 +345,11 @@ def main():
     if V["b5l"] is not None:
         prev = from_history(hist, "b5l", 28)
         if prev is not None: setv("b5", V["b5l"] - prev, "ιστορικό")
-    if V["c2"] is None and EXTRA["oi_level"]:
-        prev = from_history(hist, "oi_level", 7)
-        if prev: setv("c2", (EXTRA["oi_level"] / prev - 1) * 100, "ιστορικό")
+    if EXTRA["oi_level"]:
+        p7 = from_history(hist, "oi_level", 7)
+        if p7: setv("c2", (EXTRA["oi_level"] / p7 - 1) * 100, "ιστορικό")
+        p2 = from_history(hist, "oi_level", 2)
+        if p2: setv("f1", (EXTRA["oi_level"] / p2 - 1) * 100, "ιστορικό")
     S = score(V)
     now = dt.datetime.now(dt.timezone.utc)
     readings = [{"id": i, "layer": L, "label": lab, "unit": u, "rule": rule, "dec": dec,
