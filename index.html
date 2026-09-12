@@ -11,6 +11,10 @@
   header{background:var(--navy);color:#f5f2ea;padding:16px 22px}
   header h1{margin:0;font-size:1.45rem}
   #stamp{color:#aab1c8;font-size:.86rem;margin-top:4px}
+  .chg{background:#d9a441;color:#1b1d24;padding:9px 12px;border-radius:4px;font-size:.9rem;margin-top:8px;display:none;font-weight:600}
+  .bar{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+  button.ghost{background:transparent;color:#dfe3ef;border:1px solid #55608a;font-size:.82rem;padding:5px 10px;margin:0}
+  #live{color:#8f96b0;font-size:.8rem}
   .stale{background:#5a2a2a;color:#ffd9d9;padding:6px 10px;border-radius:4px;font-size:.85rem;margin-top:8px;display:none}
   main{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;padding:18px 22px 60px;max-width:1340px}
   @media(max-width:1000px){main{grid-template-columns:1fr}aside{order:-1}}
@@ -54,10 +58,12 @@
   <h1>Πίνακας BTC</h1>
   <div id="stamp">φόρτωση…</div>
   <div class="stale" id="stale"></div>
+  <div class="chg" id="chg"></div>
+  <div class="bar"><button id="notify" type="button" class="ghost">Ενεργοποίηση ειδοποιήσεων</button><span id="live">ελέγχει για νέα ανάγνωση κάθε 2 λεπτά</span></div>
 </header>
 <main>
 <div>
-  <div class="card"><h2>Γ — Τοποθέτηση BTC</h2><div class="sub">Ημερήσια, μετά τις 08:00 UTC. + συνωστισμός long, − συνωστισμός short.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΓ"></tbody></table></div>
+  <div class="card"><h2>Γ — Τοποθέτηση BTC</h2><div class="sub">+ συνωστισμός long, − συνωστισμός short.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΓ"></tbody></table></div>
   <div class="card"><h2>Δ — Ζήτηση</h2><div class="sub">Δεύτερη γνώμη. Οι ροές ETF και ανταλλακτηρίων θέλουν συνδρομητική πηγή και δεν μετρούν.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΔ"></tbody></table></div>
   <div class="card"><h2>Α — Καθεστώς ρευστότητας</h2><div class="sub">Μεταβολές 4 εβδομάδων. Το παγκόσμιο M2 δεν έχει ελεύθερη πηγή και δεν μετρά.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΑ"></tbody></table></div>
   <div class="card"><h2>Β — Όρεξη ρίσκου</h2><div class="sub">Μεταβολές 4 εβδομάδων.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΒ"></tbody></table></div>
@@ -71,7 +77,7 @@
       <div class="f"><label for="flipC">Το Γ αλλάζει αν</label><input id="flipC" type="text"></div>
     </div>
   </div>
-  <div class="card"><h2>Γεγονότα επόμενων 48 ωρών</h2><div class="sub">Υψηλής επίδρασης, USD και EUR, σε UTC. Το ρολόι του κεφαλαίου 8· ό,τι είναι απρογραμμάτιστο το λέει η ροή ειδήσεων που έχεις ανοιχτή, όχι ο πίνακας.</div><table class="rd"><thead><tr><th>Πότε</th><th>Τι</th><th>Πρόβλεψη</th><th>Προηγούμενο</th></tr></thead><tbody id="tEv"></tbody></table></div>
+  <div class="card"><h2>Γεγονότα επόμενων 48 ωρών</h2><div class="sub">Υψηλής επίδρασης, USD και EUR, σε UTC. Ό,τι είναι απρογραμμάτιστο το λέει η ροή ειδήσεων που έχεις ανοιχτή, όχι ο πίνακας.</div><table class="rd"><thead><tr><th>Πότε</th><th>Τι</th><th>Πρόβλεψη</th><th>Προηγούμενο</th></tr></thead><tbody id="tEv"></tbody></table></div>
   <div class="card"><h2>Ημερολόγιο πηγών</h2><div class="sub">Τι απάντησε στην τελευταία εκτέλεση του συλλέκτη.</div><div class="diag" id="diag">—</div></div>
 </div>
 <aside>
@@ -100,16 +106,15 @@
 <script>
 (function(){
 "use strict";
-var D=null;
-var KEY='pinakas_btc_risk_v1';
+var D=null, KEY='pinakas_btc_risk_v1', lastGen=null;
 function ls(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem(k)||'null');localStorage.setItem(k,JSON.stringify(v));}catch(e){return null;}}
 function sgn(s){return s>0?'+'+s:String(s);}
 function fmt(x,d){return x.toLocaleString('el-GR',{minimumFractionDigits:d,maximumFractionDigits:d});}
 function render(){
   var s=D.scores, g=new Date(D.generated);
-  document.getElementById('stamp').textContent='Ανάγνωση '+g.toLocaleString('el-GR')+' · τρέχει μόνη της κάθε πρωί 08:15 UTC';
+  document.getElementById('stamp').textContent='Ανάγνωση '+g.toLocaleString('el-GR')+' · ο συλλέκτης τρέχει κάθε ώρα';
   var age=(Date.now()-g.getTime())/36e5, st=document.getElementById('stale');
-  if(age>30){st.style.display='block';st.textContent='Η ανάγνωση είναι '+Math.round(age)+' ώρες παλιά. Ο συλλέκτης δεν έτρεξε — άνοιξε Actions στο αποθετήριο και δες την τελευταία εκτέλεση.';} else st.style.display='none';
+  if(age>3){st.style.display='block';st.textContent='Η ανάγνωση είναι '+Math.round(age)+' ώρες παλιά — ο συλλέκτης δεν έτρεξε. Actions στο αποθετήριο.';} else st.style.display='none';
   ['Α','Β','Γ','Δ'].forEach(function(L){
     var tb=document.getElementById('t'+L); tb.innerHTML='';
     D.readings.filter(function(r){return r.layer===L||(L==='Γ'&&r.layer==='Σ');}).forEach(function(r){
@@ -165,6 +170,27 @@ function risk(){
     'Το ανατρέπει (Α): '+(fa||'—'),'Το ανατρέπει (Γ): '+(fc||'—')
   ].join('\n');
 }
+function announce(j){
+  var c=document.getElementById('chg');
+  if(j.changes&&j.changes.length){
+    c.style.display='block';
+    c.textContent='Άλλαξε: '+j.changes.join(' · ')+' — '+new Date(j.generated).toLocaleTimeString('el-GR');
+    document.title='● '+j.scores.cell;
+    if(window.Notification&&Notification.permission==='granted'){
+      try{ new Notification('Πίνακας BTC — '+j.scores.cell,{body:j.changes.join(' · ')+' — '+j.scores.stance+' ×'+j.scores.mult,tag:'pinakas'}); }catch(e){}
+    }
+  } else { c.style.display='none'; document.title='Πίνακας BTC'; }
+}
+function load(first){
+  return fetch('data.json?t='+Date.now(),{cache:'no-store'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(j){
+      if(j.generated===lastGen) return;
+      var isNew=lastGen!==null; lastGen=j.generated; D=j; render();
+      if(isNew||first) announce(j);
+    })
+    .catch(function(e){ if(first) document.getElementById('stamp').textContent='Δεν βρέθηκε το data.json — ο συλλέκτης δεν έχει τρέξει ακόμη. ('+e.message+')'; });
+}
 var saved=ls(KEY)||{};
 [['r1','r1'],['r2','r2'],['r3','r3'],['r4','r4'],['flipA','fa'],['flipC','fc']].forEach(function(p){
   var e=document.getElementById(p[0]); if(saved[p[1]]!==undefined&&saved[p[1]]!==null) e.value=saved[p[1]]; e.addEventListener('input',risk);});
@@ -174,9 +200,15 @@ document.getElementById('copy').addEventListener('click',function(){
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t.value).then(done,function(){t.select();document.execCommand('copy');done();});
   else{t.select();document.execCommand('copy');done();}
 });
-fetch('data.json?t='+Date.now(),{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
-  .then(function(j){D=j;render();})
-  .catch(function(e){document.getElementById('stamp').textContent='Δεν βρέθηκε το data.json — ο συλλέκτης δεν έχει τρέξει ακόμη. Actions → Πίνακας BTC → Run workflow. ('+e.message+')';});
+document.getElementById('notify').addEventListener('click',function(){
+  if(!window.Notification){this.textContent='Ο browser δεν υποστηρίζει ειδοποιήσεις';return;}
+  var b=this;
+  Notification.requestPermission().then(function(p){ b.textContent = p==='granted'?'Ειδοποιήσεις ενεργές':'Ειδοποιήσεις απενεργοποιημένες'; });
+});
+if(window.Notification&&Notification.permission==='granted') document.getElementById('notify').textContent='Ειδοποιήσεις ενεργές';
+load(true);
+setInterval(function(){load(false);},120000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden)load(false);});
 })();
 </script>
 </body>
