@@ -6,6 +6,7 @@
 βαθμολογεί με τους κανόνες του κεφαλαίου 9 του εγχειριδίου «Η Βαλβίδα», και γράφει:
   data.json    — η τρέχουσα ανάγνωση, σκορ, σημαίες, κελί, ημερολόγιο πηγών
   history.csv  — μία γραμμή ανά ημέρα, για εκατοστημόρια και έλεγχο ανά κελί
+  alert.json   — τι άλλαξε από την προηγούμενη ανάγνωση
 
 Κάθε πηγή είναι ανεξάρτητη: αν μία αποτύχει, η ανάγνωση μένει κενή (μετρά 0) και
 το ημερολόγιο πηγών λέει ποια. Τίποτα δεν σταματά το σύνολο.
@@ -262,20 +263,27 @@ def equities():
     except Exception: pass
 
 def calendar():
-    j = get("https://nfs.faireconomy.media/ff_calendar_thisweek.json", "ημερολόγιο γεγονότων")
-    if not j: return
+    """Γεγονότα υψηλής επίδρασης, επόμενες 48 ώρες. Και οι δύο εβδομάδες, γιατί Παρασκευή
+    βράδυ η τρέχουσα έχει ήδη τελειώσει."""
     now = dt.datetime.now(dt.timezone.utc); out = []
-    for e in j:
-        try:
-            if e.get("impact") != "High" or e.get("country") not in ("USD", "EUR"): continue
-            t = dt.datetime.fromisoformat(str(e["date"]).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
-            dh = (t - now).total_seconds() / 3600
-            if -3 <= dh <= 48:
-                out.append({"t": t.strftime("%a %d/%m %H:%M UTC"), "title": e.get("title"), "ccy": e.get("country"),
-                            "forecast": e.get("forecast") or "", "previous": e.get("previous") or ""})
-        except Exception:
-            continue
-    EXTRA["events"] = sorted(out, key=lambda x: x["t"])[:14]
+    for wk, lab in (("thisweek", "τρέχουσα"), ("nextweek", "επόμενη")):
+        j = get(f"https://nfs.faireconomy.media/ff_calendar_{wk}.json", f"ημερολόγιο ({lab} εβδομάδα)")
+        for e in (j or []):
+            try:
+                if e.get("impact") != "High" or e.get("country") not in ("USD", "EUR"): continue
+                t = dt.datetime.fromisoformat(str(e["date"]).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+                dh = (t - now).total_seconds() / 3600
+                if -3 <= dh <= 48:
+                    out.append({"ts": t.timestamp(), "t": t.strftime("%a %d/%m %H:%M UTC"), "title": e.get("title"),
+                                "ccy": e.get("country"), "forecast": e.get("forecast") or "", "previous": e.get("previous") or ""})
+            except Exception:
+                continue
+    seen = set(); uniq = []
+    for e in sorted(out, key=lambda x: x["ts"]):
+        k = (e["t"], e["title"])
+        if k in seen: continue
+        seen.add(k); uniq.append(e)
+    EXTRA["events"] = uniq[:14]
 
 def read_history():
     if not os.path.exists(HIST): return []
@@ -343,20 +351,41 @@ def main():
         except Exception as e: log(f"{step.__name__} — {type(e).__name__} {str(e)[:60]}", False)
     hist = read_history()
     if V["b5l"] is not None:
-        prev = from_history(hist, "b5l", 28)
-        if prev is not None: setv("b5", V["b5l"] - prev, "ιστορικό")
+        prev5 = from_history(hist, "b5l", 28)
+        if prev5 is not None: setv("b5", V["b5l"] - prev5, "ιστορικό")
     if EXTRA["oi_level"]:
         p7 = from_history(hist, "oi_level", 7)
         if p7: setv("c2", (EXTRA["oi_level"] / p7 - 1) * 100, "ιστορικό")
         p2 = from_history(hist, "oi_level", 2)
         if p2: setv("f1", (EXTRA["oi_level"] / p2 - 1) * 100, "ιστορικό")
+
+    prev = {}
+    try:
+        with open(DATA, encoding="utf-8") as f:
+            pj = json.load(f); prev = {"cell": pj["scores"]["cell"], "flags": pj.get("flags", [])}
+    except Exception:
+        pass
+
     S = score(V)
     now = dt.datetime.now(dt.timezone.utc)
+
+    changes = []
+    if prev:
+        if prev["cell"] != S["cell"]:
+            changes.append(f"Κελί: {prev['cell']} → {S['cell']} (ρίσκο ×{S['mult']})")
+        for fl in S["flags"]:
+            if fl not in prev["flags"]: changes.append(f"Νέα σημαία: {fl}")
+        for fl in prev["flags"]:
+            if fl not in S["flags"]: changes.append(f"Έσβησε η σημαία: {fl}")
+    with open(os.path.join(ROOT, "alert.json"), "w", encoding="utf-8") as f:
+        json.dump({"changed": bool(changes), "changes": changes, "cell": S["cell"], "mult": S["mult"],
+                   "stance": S["stance"], "flags": S["flags"], "when": now.isoformat(timespec="seconds")}, f, ensure_ascii=False, indent=1)
+
     readings = [{"id": i, "layer": L, "label": lab, "unit": u, "rule": rule, "dec": dec,
                  "v": V[i], "src": SRC[i], "score": S["sc"][i]} for i, L, lab, u, rule, fn, dec in READINGS]
     out = {"generated": now.isoformat(timespec="seconds"), "readings": readings,
            "scores": {k: S[k] for k in ("sA", "sB", "sC", "sD", "stA", "stB", "eff", "stC", "stD", "cell", "mult", "stance", "flush")},
-           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG,
+           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes,
            "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l")]}
     with open(DATA, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
@@ -368,7 +397,7 @@ def main():
     rows = [r for r in hist if r.get("date") != row["date"]] + [row]
     with open(HIST, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore"); w.writeheader(); w.writerows(rows)
-    print(f"{S['cell']} ×{S['mult']} | σημαίες: {S['flags'] or '—'} | κενά: {out['missing'] or '—'}")
+    print(f"{S['cell']} ×{S['mult']} | αλλαγές: {changes or '—'} | κενά: {out['missing'] or '—'}")
     print("\n".join(LOG))
 
 if __name__ == "__main__":
