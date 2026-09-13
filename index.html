@@ -115,9 +115,9 @@ function sgn(s){return s>0?'+'+s:String(s);}
 function fmt(x,d){return x.toLocaleString('el-GR',{minimumFractionDigits:d,maximumFractionDigits:d});}
 function render(){
   var s=D.scores, g=new Date(D.generated);
-  document.getElementById('stamp').textContent='Ανάγνωση '+g.toLocaleString('el-GR')+' · ο συλλέκτης τρέχει κάθε ώρα';
+  document.getElementById('stamp').textContent='Ανάγνωση '+g.toLocaleString('el-GR')+' · ο συλλέκτης τρέχει 4–6 φορές τη μέρα';
   var age=(Date.now()-g.getTime())/36e5, st=document.getElementById('stale');
-  if(age>3){st.style.display='block';st.textContent='Η ανάγνωση είναι '+Math.round(age)+' ώρες παλιά — ο συλλέκτης δεν έτρεξε. Actions στο αποθετήριο.';} else st.style.display='none';
+  if(age>10){st.style.display='block';st.textContent='Η ανάγνωση είναι '+Math.round(age)+' ώρες παλιά. Το χρονοπρόγραμμα δεν είναι εγγυημένο — αν θες τώρα νέα ανάγνωση: Actions → Pinakas BTC → Run workflow.';} else if(age>6){st.style.display='block';st.style.background='#4a4430';st.style.color='#f4e9d8';st.textContent='Η τελευταία ανάγνωση έγινε πριν '+Math.round(age)+' ώρες — φυσιολογικό. Τα μακρο δεν έχουν αλλάξει· η τοποθέτηση μπορεί.';} else st.style.display='none';
   ['Α','Β','Γ','Δ'].forEach(function(L){
     var tb=document.getElementById('t'+L); tb.innerHTML='';
     D.readings.filter(function(r){return r.layer===L||(L==='Γ'&&r.layer==='Σ');}).forEach(function(r){
