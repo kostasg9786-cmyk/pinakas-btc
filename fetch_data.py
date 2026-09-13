@@ -71,6 +71,11 @@ READINGS = [
     ("b4", "Β", "Β4 Νομίσματα αναδυόμενων έναντι δολαρίου, 4 εβδ.", "%", "+1 ≥+1,5 · −1 ≤−1,5", band(-1.5, 1.5), 2),
     ("b5", "Β", "Β5 Κυριαρχία BTC, 4 εβδ.", "μον.", "+1 ≤−2 · −1 ≥+2 · Όψιμη φάση ≤−5", band_inv(-2, 2), 2),
     ("b5l", "Β", "Β5β Κυριαρχία BTC, επίπεδο", "%", "", None, 2),
+    ("e1", "Ε", "Ε1 Συσχέτιση 30 ημερών BTC–τεχνολογικού δείκτη", "", "", None, 2),
+    ("e2", "Ε", "Ε2 Εταιρεία-ταμείο μείον BTC, 1 ημέρα", "μον.%", "", None, 2),
+    ("e3", "Ε", "Ε3 Ανταλλακτήριο μείον BTC, 1 ημέρα", "μον.%", "", None, 2),
+    ("e4", "Ε", "Ε4 Ασφάλιστρο μεταβλητότητας (IV30 − πραγματοποιημένη)", "μον.", "", None, 1),
+    ("e5", "Ε", "Ε5 Πραγματοποιημένη μεταβλητότητα 30 ημερών", "%", "", None, 1),
 ]
 IDS = [r[0] for r in READINGS]
 V = {i: None for i in IDS}
@@ -93,6 +98,13 @@ def derivs():
         c = sorted(c, key=lambda x: x[0])
         p0, p1 = float(c[-8][4]), float(c[-1][4])
         if p0 > 0: setv("c2p", (p1 / p0 - 1) * 100, "spot ΗΠΑ"); EXTRA["price"] = p1
+        import math
+        cl = [float(x[4]) for x in c[-31:]]
+        rets = [math.log(cl[i] / cl[i-1]) for i in range(1, len(cl)) if cl[i-1] > 0]
+        if len(rets) >= 20:
+            mu = sum(rets) / len(rets)
+            sd = (sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)) ** 0.5
+            setv("e5", sd * (365 ** 0.5) * 100, "spot ΗΠΑ")
     except Exception:
         pass
     d = get("https://api.coingecko.com/api/v3/derivatives", "funding/OI (συγκεντρωτική)")
@@ -245,9 +257,9 @@ def macro():
 def equities():
     try:
         import yfinance as yf
-        px = yf.download(["IWM", "SPY", "SPHB", "SPLV", "^VIX", "^VIX3M"], period="2mo", interval="1d",
-                         progress=False, auto_adjust=True, group_by="column")["Close"].dropna(how="all")
-        log("μετοχές (6 σειρές)")
+        px = yf.download(["IWM", "SPY", "SPHB", "SPLV", "^VIX", "^VIX3M", "QQQ", "BTC-USD", "MSTR", "COIN"],
+                         period="4mo", interval="1d", progress=False, auto_adjust=True, group_by="column")["Close"].dropna(how="all")
+        log("μετοχές και proxy (10 σειρές)")
     except Exception as e:
         log(f"μετοχές — {type(e).__name__} {str(e)[:60]}", False); return
     def rel(a, b):
@@ -260,6 +272,20 @@ def equities():
     try:
         v, v3 = px["^VIX"].dropna().iloc[-1], px["^VIX3M"].dropna().iloc[-1]
         setv("b3", v, "μετοχές"); setv("b3t", v3 - v, "μετοχές")
+    except Exception: pass
+    try:
+        r = px[["BTC-USD", "QQQ"]].dropna().pct_change().dropna().tail(30)
+        if len(r) >= 20: setv("e1", float(r["BTC-USD"].corr(r["QQQ"])), "μετοχές")
+    except Exception: pass
+    def day(sym):
+        s2 = px[sym].dropna()
+        return (s2.iloc[-1] / s2.iloc[-2] - 1) * 100 if len(s2) >= 2 else None
+    try:
+        b = day("BTC-USD")
+        if b is not None:
+            m, cn = day("MSTR"), day("COIN")
+            if m is not None: setv("e2", m - b, "μετοχές")
+            if cn is not None: setv("e3", cn - b, "μετοχές")
     except Exception: pass
 
 def calendar():
@@ -314,6 +340,73 @@ STANCE = {"Επέκταση": {"Συνωστισμός short": "Long με πλή
                          "Ισορροπία": "Short στα ράλι.",
                          "Συνωστισμός long": "Short στα ράλι με πλήρες ρίσκο· ο καταρράκτης είναι σύμμαχος."}}
 
+def flip_point(fn, v):
+    """Πόσο πρέπει να κινηθεί μια ανάγνωση για να αλλάξει το σκορ της."""
+    if fn is None or v is None: return None
+    try: base = fn(v)
+    except Exception: return None
+    step = max(abs(v) * 0.002, 0.01)
+    best = None
+    for d in (1, -1):
+        x = v
+        for _ in range(3000):
+            x += step * d
+            try: sc = fn(x)
+            except Exception: break
+            if sc != base:
+                cand = (x, sc, abs(x - v))
+                if best is None or cand[2] < best[2]: best = cand
+                break
+    return best
+
+def flips(V, S, readings_meta):
+    """Γράφει μόνο του τη γραμμή «τι το ανατρέπει», με αριθμό."""
+    meta = {m[0]: m for m in readings_meta}
+    def near(ids, need_dir):
+        out = []
+        for i in ids:
+            if i == "a7": continue
+            m = meta[i]; fp = flip_point(m[5], V[i])
+            if not fp: continue
+            new, cur = fp[1], S["sc"][i]
+            if (new - cur) * need_dir <= 0: continue
+            word = "ανέβει πάνω από" if fp[0] > V[i] else "πέσει κάτω από"
+            out.append((fp[2] / max(abs(V[i]), 1), f"{m[2]} {word} {round(fp[0], m[6])} {m[3]} (τώρα {round(V[i], m[6])})"))
+        out.sort(key=lambda x: x[0])
+        return [t for _, t in out[:2]]
+
+    res = {}
+    aids = ("a1", "a2", "a4", "a5", "a6", "a7")
+    up, dn = 3 - S["sA"], S["sA"] + 3
+    if up <= dn: need, target, d = up, "Επέκταση", 1
+    else: need, target, d = dn, "Συρρίκνωση", -1
+    cands = near(aids, d)
+    if need <= 0:
+        back = near(aids, -d)
+        res["A"] = (f"Το Α είναι ήδη {S['stA']}· φεύγει από εκεί αν {back[0]}." if back else f"Το Α είναι ήδη {S['stA']}.")
+    elif need == 1 and cands:
+        res["A"] = f"Το Α γίνεται {target} αν {cands[0]}."
+    elif cands:
+        res["A"] = f"Το Α θέλει {need} βαθμούς για {target}· πιο κοντά: " + " · ".join(cands) + "."
+    else:
+        res["A"] = f"Το Α θέλει {need} βαθμούς για {target}."
+    cids = ("c1", "c2", "c3", "c4", "c5")
+    upC, dnC = 3 - S["sC"], S["sC"] + 3
+    if upC <= dnC: needC, targetC, dC = upC, "Συνωστισμός long", 1
+    else: needC, targetC, dC = dnC, "Συνωστισμός short", -1
+    cC = near(cids, dC)
+    extra = "· ανάβει Ξέπλυμα αν το OI 2 ημερών πέσει κάτω από −15%"
+    if needC <= 0:
+        backC = near(cids, -dC)
+        res["C"] = (f"Το Γ είναι ήδη {S['stC']}· φεύγει αν {backC[0]}{extra}." if backC else f"Το Γ είναι ήδη {S['stC']}{extra}.")
+    elif needC == 1 and cC:
+        res["C"] = f"Το Γ γίνεται {targetC} αν {cC[0]}{extra}."
+    elif cC:
+        res["C"] = f"Το Γ θέλει {needC} βαθμούς για {targetC}· πιο κοντά: " + " · ".join(cC) + extra + "."
+    else:
+        res["C"] = f"Το Γ θέλει {needC} βαθμούς για {targetC}{extra}."
+    return res
+
 def score(V):
     sc = {}
     for i, layer, label, unit, rule, fn, dec in READINGS:
@@ -359,6 +452,9 @@ def main():
         p2 = from_history(hist, "oi_level", 2)
         if p2: setv("f1", (EXTRA["oi_level"] / p2 - 1) * 100, "ιστορικό")
 
+    if V["f3"] is not None and V["e5"] is not None:
+        setv("e4", V["f3"] - V["e5"], "υπολογισμός")
+
     prev = {}
     try:
         with open(DATA, encoding="utf-8") as f:
@@ -367,6 +463,7 @@ def main():
         pass
 
     S = score(V)
+    FL = flips(V, S, READINGS)
     now = dt.datetime.now(dt.timezone.utc)
 
     changes = []
@@ -385,7 +482,7 @@ def main():
                  "v": V[i], "src": SRC[i], "score": S["sc"][i]} for i, L, lab, u, rule, fn, dec in READINGS]
     out = {"generated": now.isoformat(timespec="seconds"), "readings": readings,
            "scores": {k: S[k] for k in ("sA", "sB", "sC", "sD", "stA", "stB", "eff", "stC", "stD", "cell", "mult", "stance", "flush")},
-           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes,
+           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL,
            "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l")]}
     with open(DATA, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
