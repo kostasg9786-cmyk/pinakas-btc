@@ -50,6 +50,7 @@
   .f{display:flex;flex-direction:column;gap:2px}.f label{font-size:.82rem;font-weight:600;color:var(--navy2)}
   .f input{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:4px}
   .diag{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#f7f8fb;border:1px solid var(--line);border-radius:4px;padding:8px;white-space:pre-wrap}
+  .flip{background:var(--soft);border-left:3px solid var(--navy2);padding:8px 11px;font-size:.88rem;margin-bottom:8px}
   .warn{background:var(--amber2);border-left:3px solid var(--amber);padding:8px 10px;font-size:.84rem;margin-top:8px}
 </style>
 </head>
@@ -67,16 +68,18 @@
   <div class="card"><h2>Δ — Ζήτηση</h2><div class="sub">Δεύτερη γνώμη. Οι ροές ETF και ανταλλακτηρίων θέλουν συνδρομητική πηγή και δεν μετρούν.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΔ"></tbody></table></div>
   <div class="card"><h2>Α — Καθεστώς ρευστότητας</h2><div class="sub">Μεταβολές 4 εβδομάδων. Το παγκόσμιο M2 δεν έχει ελεύθερη πηγή και δεν μετρά.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΑ"></tbody></table></div>
   <div class="card"><h2>Β — Όρεξη ρίσκου</h2><div class="sub">Μεταβολές 4 εβδομάδων.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Κανόνας</th><th>Σκορ</th></tr></thead><tbody id="tΒ"></tbody></table></div>
+  <div class="card"><h2>Ε — Διασυνδέσεις και μεταβλητότητα</h2><div class="sub">Πληροφοριακό, χωρίς σκορ. Η συσχέτιση λέει ποιο στρώμα βαραίνει· οι proxy-μετοχές προηγούνται στις ώρες ΗΠΑ· το ασφάλιστρο λέει αν η προστασία είναι ακριβή.</div><table class="rd"><thead><tr><th>Ανάγνωση</th><th>Τιμή</th><th>Τι σημαίνει</th></tr></thead><tbody id="tΕ"></tbody></table></div>
   <div class="card"><h2>Ρίσκο</h2><div class="sub">Μένουν σε αυτή τη συσκευή. Το ενεργό R = βασικό R × πολλαπλασιαστής, κομμένο στο ένα τρίτο του ημερήσιου ορίου.</div>
     <div class="two">
       <div class="f"><label for="r1">Βασικό R (% λογαριασμού)</label><input id="r1" type="number" step="0.05" value="1"></div>
       <div class="f"><label for="r2">Ημερήσιο όριο funded (%)</label><input id="r2" type="number" step="0.1" value="4"></div>
       <div class="f"><label for="r3">ATR στο πλαίσιο της ιδέας (% τιμής)</label><input id="r3" type="number" step="0.05"></div>
       <div class="f"><label for="r4">Πολλαπλάσιο ATR για stop</label><input id="r4" type="number" step="0.1" value="1.5"></div>
-      <div class="f"><label for="flipA">Το ενεργό καθεστώς αλλάζει αν</label><input id="flipA" type="text"></div>
-      <div class="f"><label for="flipC">Το Γ αλλάζει αν</label><input id="flipC" type="text"></div>
+      <div class="f"><label for="flipA">Δική σου σημείωση (Α)</label><input id="flipA" type="text"></div>
+      <div class="f"><label for="flipC">Δική σου σημείωση (Γ)</label><input id="flipC" type="text"></div>
     </div>
   </div>
+  <div class="card"><h2>Τι το ανατρέπει</h2><div class="sub">Υπολογίζεται μόνο του από την απόσταση κάθε ανάγνωσης στο όριό της.</div><div class="flip" id="flipA_auto">—</div><div class="flip" id="flipC_auto">—</div></div>
   <div class="card"><h2>Γεγονότα επόμενων 48 ωρών</h2><div class="sub">Υψηλής επίδρασης, USD και EUR, σε UTC. Ό,τι είναι απρογραμμάτιστο το λέει η ροή ειδήσεων που έχεις ανοιχτή, όχι ο πίνακας.</div><table class="rd"><thead><tr><th>Πότε</th><th>Τι</th><th>Πρόβλεψη</th><th>Προηγούμενο</th></tr></thead><tbody id="tEv"></tbody></table></div>
   <div class="card"><h2>Ημερολόγιο πηγών</h2><div class="sub">Τι απάντησε στην τελευταία εκτέλεση του συλλέκτη.</div><div class="diag" id="diag">—</div></div>
 </div>
@@ -126,6 +129,20 @@ function render(){
       tb.appendChild(tr);
     });
   });
+  var tE=document.getElementById('tΕ'); tE.innerHTML='';
+  var MEAN={e1:function(v){return v>0.6?'υψηλή — στις ώρες ΗΠΑ το BTC είναι δείκτης ρίσκου':(v<0.3?'χαμηλή — κυριαρχούν οι κρυπτο-εγγενείς ροές':'μικτή');},
+            e2:function(v){return Math.abs(v)<2?'χωρίς απόκλιση':(v>0?'η μετοχή τιμολογεί πιο θετικά από το BTC':'η μετοχή τιμολογεί πιο αρνητικά από το BTC');},
+            e3:function(v){return Math.abs(v)<2?'χωρίς απόκλιση':(v>0?'η δραστηριότητα τιμολογείται πιο θετικά':'η δραστηριότητα τιμολογείται πιο αρνητικά');},
+            e4:function(v){return v>5?'η προστασία είναι ακριβή σε σχέση με την πραγματική κίνηση':(v<-5?'η προστασία είναι φθηνή — η αγορά υποτιμά την κίνηση':'κοντά στο δίκαιο');},
+            e5:function(v){return v>80?'πολύ υψηλή — μεγάλα stop, μικρή θέση':(v<35?'χαμηλή':'μέτρια');}};
+  D.readings.filter(function(r){return r.layer==='Ε';}).forEach(function(r){
+    var has=r.v!==null&&r.v!==undefined, tr=document.createElement('tr');
+    tr.innerHTML='<td><span class="dot '+(has?'ok':'bad')+'"></span>'+r.label+'</td>'
+      +'<td class="val">'+(has?fmt(r.v,r.dec)+' '+r.unit:'—')+'</td>'
+      +'<td class="src">'+(has&&MEAN[r.id]?MEAN[r.id](r.v):'—')+'</td>';
+    tE.appendChild(tr);});
+  document.getElementById('flipA_auto').textContent=(D.flips&&D.flips.A)||'—';
+  document.getElementById('flipC_auto').textContent=(D.flips&&D.flips.C)||'—';
   document.getElementById('cell').textContent=s.cell;
   document.getElementById('stance').textContent=s.stance;
   document.getElementById('mult').textContent='×'+s.mult.toLocaleString('el-GR');
@@ -167,7 +184,9 @@ function risk(){
     'Κελί: '+s.cell+' → '+s.stance+' ×'+m.toLocaleString('el-GR'),
     'Ρίσκο: '+(effR===null?'—':'ενεργό R '+fmt(effR,2)+'%'+(stop?' | stop '+fmt(stop,2)+'% | θέση '+fmt(notion,2):'')),
     'Δεδομένα: funding '+v('c1')+' | OI7 '+v('c2')+' | skew '+v('c3')+' | p/c '+v('c4')+' | basis '+v('c5'),
-    'Το ανατρέπει (Α): '+(fa||'—'),'Το ανατρέπει (Γ): '+(fc||'—')
+    'Ανατρέπεται (Α): '+((D.flips&&D.flips.A)||'—'),
+    'Ανατρέπεται (Γ): '+((D.flips&&D.flips.C)||'—'),
+    'Σημείωση: '+(fa||'—')+' | '+(fc||'—')
   ].join('\n');
 }
 function announce(j){
