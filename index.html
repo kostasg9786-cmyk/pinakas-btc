@@ -50,6 +50,10 @@
   .f{display:flex;flex-direction:column;gap:2px}.f label{font-size:.82rem;font-weight:600;color:var(--navy2)}
   .f input{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:4px}
   .diag{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#f7f8fb;border:1px solid var(--line);border-radius:4px;padding:8px;white-space:pre-wrap}
+  .interp .plain{font-weight:600;color:var(--navy);margin:0 0 8px;font-size:.92rem}
+  .interp h3{font-size:.8rem;color:var(--navy2);margin:12px 0 4px;letter-spacing:.2px}
+  .interp ul{margin:0;padding-left:18px;font-size:.86rem}
+  .interp li{margin-bottom:5px}
   .flip{background:var(--soft);border-left:3px solid var(--navy2);padding:8px 11px;font-size:.88rem;margin-bottom:8px}
   .warn{background:var(--amber2);border-left:3px solid var(--amber);padding:8px 10px;font-size:.84rem;margin-top:8px}
 </style>
@@ -79,13 +83,14 @@
       <div class="f"><label for="flipC">Δική σου σημείωση (Γ)</label><input id="flipC" type="text"></div>
     </div>
   </div>
-  <div class="card"><h2>Τι το ανατρέπει</h2><div class="sub">Υπολογίζεται μόνο του από την απόσταση κάθε ανάγνωσης στο όριό της.</div><div class="flip" id="flipA_auto">—</div><div class="flip" id="flipC_auto">—</div></div>
+  <div class="card"><h2>Τι το ανατρέπει</h2><div class="sub">Υπολογίζεται μόνο του από την απόσταση κάθε ανάγνωσης στο όριό της.</div><div class="flip" id="flipA_auto">—</div><div class="flip" id="flipB_auto" style="display:none"></div><div class="flip" id="flipC_auto">—</div></div>
   <div class="card"><h2>Γεγονότα επόμενων 48 ωρών</h2><div class="sub">Υψηλής επίδρασης, USD και EUR, στην ώρα της συσκευής σου (<span id="tzname"></span>)· σε παρένθεση η ώρα UTC. Ό,τι είναι απρογραμμάτιστο το λέει η ροή ειδήσεων που έχεις ανοιχτή, όχι ο πίνακας.</div><table class="rd"><thead><tr><th>Πότε</th><th>Τι</th><th>Πρόβλεψη</th><th>Προηγούμενο</th></tr></thead><tbody id="tEv"></tbody></table></div>
   <div class="card"><h2>Ημερολόγιο πηγών</h2><div class="sub">Τι απάντησε στην τελευταία εκτέλεση του συλλέκτη.</div><div class="diag" id="diag">—</div></div>
 </div>
 <aside>
   <div class="verdict"><div class="cell" id="cell">—</div><div class="st" id="stance">—</div><div class="m" id="mult">—</div>
     <div class="flags" id="flags"></div></div>
+  <div class="card"><h2>Ερμηνεία</h2><div class="interp" id="interp">—</div></div>
   <div class="card"><h2>Σκορ</h2>
     <div class="row"><span>Α Καθεστώς</span><span><b id="sA">0</b> · <span class="state" id="stA">—</span></span></div>
     <div class="row"><span>Β Όρεξη</span><span><b id="sB">0</b> · <span class="state" id="stB">—</span></span></div>
@@ -143,6 +148,12 @@ function render(){
     tE.appendChild(tr);});
   document.getElementById('flipA_auto').textContent=(D.flips&&D.flips.A)||'—';
   document.getElementById('flipC_auto').textContent=(D.flips&&D.flips.C)||'—';
+  var fb=document.getElementById('flipB_auto'); if(D.flips&&D.flips.B){fb.style.display='block';fb.textContent=D.flips.B;} else fb.style.display='none';
+  var I=D.interp, ie=document.getElementById('interp');
+  if(I&&I.plain){ var h='<p class="plain">'+esc(I.plain)+'</p>';
+    [['Τις επόμενες ώρες – 2 μέρες','short'],['Ημέρες – εβδομάδες','medium'],['Μήνες','long']].forEach(function(p){
+      if(I[p[1]]&&I[p[1]].length) h+='<h3>'+p[0]+'</h3><ul>'+I[p[1]].map(function(l){return '<li>'+esc(l)+'</li>';}).join('')+'</ul>';});
+    ie.innerHTML=h; } else ie.textContent='Η ερμηνεία εμφανίζεται μετά την επόμενη εκτέλεση του συλλέκτη.';
   document.getElementById('cell').textContent=s.cell;
   document.getElementById('stance').textContent=s.stance;
   document.getElementById('mult').textContent='×'+s.mult.toLocaleString('el-GR');
@@ -161,6 +172,7 @@ function render(){
   if(D.missing&&D.missing.length){w.style.display='block';w.textContent='Χωρίς τιμή (μετρούν 0): '+D.missing.join(', ')+'.';} else w.style.display='none';
   risk();
 }
+function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 function loc(ts){return new Date(ts*1000).toLocaleString('el-GR',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});}
 function renderEvents(){
   var tzEl=document.getElementById('tzname'); if(tzEl){try{tzEl.textContent=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){}}
@@ -199,13 +211,15 @@ function risk(){
     'Α: '+sgn(s.sA)+' '+s.stA+' | Β: '+sgn(s.sB)+' '+s.stB+' | Ενεργό: '+s.eff,
     'Γ: '+sgn(s.sC)+' '+s.stC+(s.flush?' (μετά από Ξέπλυμα)':'')+' | Δ: '+sgn(s.sD)+' '+s.stD,
     'Σημαίες: '+(D.flags.length?D.flags.join(', '):'—'),
+    'Με απλά λόγια: '+((D.interp&&D.interp.plain)||'—'),
     'Κελί: '+s.cell+' → '+s.stance+' ×'+m.toLocaleString('el-GR'),
     'Ρίσκο: '+(effR===null?'—':'ενεργό R '+fmt(effR,2)+'%'+(stop?' | stop '+fmt(stop,2)+'% | θέση '+fmt(notion,2):'')),
     'Δεδομένα: funding '+v('c1')+' | OI7 '+v('c2')+' | skew '+v('c3')+' | p/c '+v('c4')+' | basis '+v('c5'),
     'Ανατρέπεται (Α): '+((D.flips&&D.flips.A)||'—'),
     'Ανατρέπεται (Γ): '+((D.flips&&D.flips.C)||'—'),
+    (D.flips&&D.flips.B?'Ανατρέπεται (Β): '+D.flips.B:null),
     'Σημείωση: '+(fa||'—')+' | '+(fc||'—')
-  ].join('\n');
+  ].filter(function(x){return x!==null;}).join('\n');
 }
 function announce(j){
   var c=document.getElementById('chg');
