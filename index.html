@@ -156,12 +156,28 @@ function render(){
   var tds=document.querySelectorAll('#mx td');
   for(var i=0;i<tds.length;i++) tds[i].classList.toggle('on',tds[i].dataset.r===s.eff&&tds[i].dataset.c===s.stC);
   document.getElementById('diag').textContent=(D.log||[]).join('\n');
-  var te=document.getElementById('tEv'); te.innerHTML='';
-  (D.events||[]).forEach(function(e){var tr=document.createElement('tr');tr.innerHTML='<td class="val">'+e.t+'</td><td>'+e.ccy+' · '+e.title+'</td><td>'+(e.forecast||'—')+'</td><td>'+(e.previous||'—')+'</td>';te.appendChild(tr);});
-  if(!(D.events||[]).length) te.innerHTML='<tr><td colspan="4" class="src">Κανένα γεγονός υψηλής επίδρασης στις επόμενες 48 ώρες.</td></tr>';
+  renderEvents();
   var w=document.getElementById('warn');
   if(D.missing&&D.missing.length){w.style.display='block';w.textContent='Χωρίς τιμή (μετρούν 0): '+D.missing.join(', ')+'.';} else w.style.display='none';
   risk();
+}
+function renderEvents(){
+  if(!D) return;
+  var te=document.getElementById('tEv'); te.innerHTML='';
+  var now=Date.now(), X=D.extra||{}, ev=D.events||[];
+  if(X.events_ok===false){ te.innerHTML='<tr><td colspan="4" class="src" style="color:#8d2f2f">Η πηγή του ημερολογίου δεν απάντησε — τα γεγονότα είναι άγνωστα, όχι ανύπαρκτα. Έλεγξε τη δική σου ροή.</td></tr>'; return; }
+  ev.forEach(function(e){
+    var past=e.ts&&e.ts*1000<now, tr=document.createElement('tr');
+    if(past) tr.style.opacity='0.5';
+    tr.innerHTML='<td class="val">'+e.t+(past?' <span class="src">· βγήκε</span>':'')+'</td><td>'+e.ccy+' · '+e.title+'</td><td>'+(e.forecast||'—')+'</td><td>'+(e.previous||'—')+'</td>';
+    te.appendChild(tr);});
+  var until=X.events_until?X.events_until*1000:null, horizon=now+48*3600e3;
+  if(until&&until<horizon){
+    var d=new Date(until).toLocaleString('el-GR',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    var tr=document.createElement('tr');
+    tr.innerHTML='<td colspan="4" class="src" style="color:#a5672a">'+(ev.length?'':'Κανένα γεγονός μέχρι '+d+'. ')+'Η πηγή καλύπτει μέχρι '+d+' — για εκεί και μετά, άγνωστο. Τα γεγονότα της επόμενης εβδομάδας εμφανίζονται όταν η πηγή αλλάξει εβδομάδα.</td>';
+    te.appendChild(tr);
+  } else if(!ev.length){ te.innerHTML='<tr><td colspan="4" class="src">Κανένα γεγονός υψηλής επίδρασης στις επόμενες 48 ώρες.</td></tr>'; }
 }
 function risk(){
   if(!D) return;
@@ -226,7 +242,7 @@ document.getElementById('notify').addEventListener('click',function(){
 });
 if(window.Notification&&Notification.permission==='granted') document.getElementById('notify').textContent='Ειδοποιήσεις ενεργές';
 load(true);
-setInterval(function(){load(false);},120000);
+setInterval(function(){load(false); renderEvents();},120000);
 document.addEventListener('visibilitychange',function(){if(!document.hidden)load(false);});
 })();
 </script>
