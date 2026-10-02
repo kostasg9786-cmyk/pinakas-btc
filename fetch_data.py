@@ -289,27 +289,29 @@ def equities():
     except Exception: pass
 
 def calendar():
-    """Γεγονότα υψηλής επίδρασης, επόμενες 48 ώρες. Και οι δύο εβδομάδες, γιατί Παρασκευή
-    βράδυ η τρέχουσα έχει ήδη τελειώσει."""
-    now = dt.datetime.now(dt.timezone.utc); out = []
-    for wk, lab in (("thisweek", "τρέχουσα"), ("nextweek", "επόμενη")):
-        j = get(f"https://nfs.faireconomy.media/ff_calendar_{wk}.json", f"ημερολόγιο ({lab} εβδομάδα)")
-        for e in (j or []):
-            try:
-                if e.get("impact") != "High" or e.get("country") not in ("USD", "EUR"): continue
-                t = dt.datetime.fromisoformat(str(e["date"]).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
-                dh = (t - now).total_seconds() / 3600
-                if -3 <= dh <= 48:
-                    out.append({"ts": t.timestamp(), "t": t.strftime("%a %d/%m %H:%M UTC"), "title": e.get("title"),
-                                "ccy": e.get("country"), "forecast": e.get("forecast") or "", "previous": e.get("previous") or ""})
-            except Exception:
-                continue
-    seen = set(); uniq = []
-    for e in sorted(out, key=lambda x: x["ts"]):
-        k = (e["t"], e["title"])
-        if k in seen: continue
-        seen.add(k); uniq.append(e)
-    EXTRA["events"] = uniq[:14]
+    """Γεγονότα υψηλής επίδρασης, επόμενες 48 ώρες. Η πηγή δημοσιεύει μόνο την τρέχουσα εβδομάδα·
+    το αρχείο της επόμενης δίνει 404 σε κάθε έλεγχο και εφεδρικός διακομιστής δεν υπάρχει. Γι' αυτό
+    καταγράφεται μέχρι πότε καλύπτει η πηγή, ώστε η σελίδα να λέει «άγνωστο» και όχι «κανένα γεγονός»
+    για το διάστημα μετά."""
+    now = dt.datetime.now(dt.timezone.utc); out = []; last = None
+    j = get("https://nfs.faireconomy.media/ff_calendar_thisweek.json", "ημερολόγιο γεγονότων")
+    EXTRA["events_ok"] = j is not None
+    for e in (j or []):
+        try:
+            t = dt.datetime.fromisoformat(str(e["date"]).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+        except Exception:
+            continue
+        if last is None or t > last: last = t
+        try:
+            if e.get("impact") != "High" or e.get("country") not in ("USD", "EUR"): continue
+            dh = (t - now).total_seconds() / 3600
+            if -3 <= dh <= 48:
+                out.append({"ts": t.timestamp(), "t": t.strftime("%a %d/%m %H:%M UTC"), "title": e.get("title"),
+                            "ccy": e.get("country"), "forecast": e.get("forecast") or "", "previous": e.get("previous") or ""})
+        except Exception:
+            continue
+    EXTRA["events_until"] = last.timestamp() if last else None
+    EXTRA["events"] = sorted(out, key=lambda x: x["ts"])[:14]
 
 def read_history():
     if not os.path.exists(HIST): return []
