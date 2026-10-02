@@ -596,6 +596,23 @@ def main():
         p2 = from_history(hist, "oi_level", 2)
         if p2: setv("f1", (EXTRA["oi_level"] / p2 - 1) * 100, "ιστορικό")
 
+    # Ανάγνωση που απέτυχε σε αυτή την εκτέλεση κρατά την τελευταία γνωστή τιμή (σημερινή ή χθεσινή),
+    # δηλωμένη ως προηγούμενη. Μια πηγή που πέφτει δεν πρέπει να αλλάζει το καθεστώς.
+    STALE = []
+    for i in IDS:
+        if V[i] is not None: continue
+        for r in reversed(hist):
+            try:
+                age = (dt.date.today() - dt.date.fromisoformat(r["date"][:10])).days
+            except Exception:
+                continue
+            if age > 1: break
+            try:
+                val = float(r.get(i, ""))
+            except Exception:
+                continue
+            setv(i, val, f"προηγ. τιμή {r['date'][8:10]}/{r['date'][5:7]}"); STALE.append(i); break
+
     if V["f3"] is not None and V["e5"] is not None:
         setv("e4", V["f3"] - V["e5"], "υπολογισμός")
 
@@ -618,6 +635,8 @@ def main():
             if fl not in prev["flags"]: changes.append(f"Νέα σημαία: {fl}")
         for fl in prev["flags"]:
             if fl not in S["flags"]: changes.append(f"Έσβησε η σημαία: {fl}")
+    if changes and STALE:
+        changes.append(f"Σημείωση: {len(STALE)} αναγνώσεις είναι προηγούμενες τιμές, γιατί η πηγή τους δεν απάντησε ({', '.join(STALE)}).")
     with open(os.path.join(ROOT, "alert.json"), "w", encoding="utf-8") as f:
         json.dump({"changed": bool(changes), "changes": changes, "cell": S["cell"], "mult": S["mult"],
                    "stance": S["stance"], "flags": S["flags"], "when": now.isoformat(timespec="seconds")}, f, ensure_ascii=False, indent=1)
@@ -640,7 +659,7 @@ def main():
                  "v": V[i], "src": SRC[i], "score": S["sc"][i]} for i, L, lab, u, rule, fn, dec in READINGS]
     out = {"generated": now.isoformat(timespec="seconds"), "readings": readings,
            "scores": {k: S[k] for k in ("sA", "sB", "sC", "sD", "stA", "stB", "eff", "stC", "stD", "cell", "mult", "stance", "flush")},
-           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF,
+           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF, "stale": STALE,
            "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l")]}
     with open(DATA, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
