@@ -600,7 +600,7 @@ def main():
     # δηλωμένη ως προηγούμενη. Μια πηγή που πέφτει δεν πρέπει να αλλάζει το καθεστώς.
     STALE = []
     for i in IDS:
-        if V[i] is not None: continue
+        if V[i] is not None or i == "e4": continue   # το e4 υπολογίζεται από f3 και e5
         for r in reversed(hist):
             try:
                 age = (dt.date.today() - dt.date.fromisoformat(r["date"][:10])).days
@@ -636,7 +636,7 @@ def main():
         for fl in prev["flags"]:
             if fl not in S["flags"]: changes.append(f"Έσβησε η σημαία: {fl}")
     if changes and STALE:
-        changes.append(f"Σημείωση: {len(STALE)} αναγνώσεις είναι προηγούμενες τιμές, γιατί η πηγή τους δεν απάντησε ({', '.join(STALE)}).")
+        changes.append("Σημείωση: με προηγούμενη τιμή, επειδή η πηγή τους δεν απάντησε: " + ", ".join(STALE) + ".")
     with open(os.path.join(ROOT, "alert.json"), "w", encoding="utf-8") as f:
         json.dump({"changed": bool(changes), "changes": changes, "cell": S["cell"], "mult": S["mult"],
                    "stance": S["stance"], "flags": S["flags"], "when": now.isoformat(timespec="seconds")}, f, ensure_ascii=False, indent=1)
