@@ -80,7 +80,7 @@
     </div>
   </div>
   <div class="card"><h2>Τι το ανατρέπει</h2><div class="sub">Υπολογίζεται μόνο του από την απόσταση κάθε ανάγνωσης στο όριό της.</div><div class="flip" id="flipA_auto">—</div><div class="flip" id="flipC_auto">—</div></div>
-  <div class="card"><h2>Γεγονότα επόμενων 48 ωρών</h2><div class="sub">Υψηλής επίδρασης, USD και EUR, σε UTC. Ό,τι είναι απρογραμμάτιστο το λέει η ροή ειδήσεων που έχεις ανοιχτή, όχι ο πίνακας.</div><table class="rd"><thead><tr><th>Πότε</th><th>Τι</th><th>Πρόβλεψη</th><th>Προηγούμενο</th></tr></thead><tbody id="tEv"></tbody></table></div>
+  <div class="card"><h2>Γεγονότα επόμενων 48 ωρών</h2><div class="sub">Υψηλής επίδρασης, USD και EUR, στην ώρα της συσκευής σου (<span id="tzname"></span>)· σε παρένθεση η ώρα UTC. Ό,τι είναι απρογραμμάτιστο το λέει η ροή ειδήσεων που έχεις ανοιχτή, όχι ο πίνακας.</div><table class="rd"><thead><tr><th>Πότε</th><th>Τι</th><th>Πρόβλεψη</th><th>Προηγούμενο</th></tr></thead><tbody id="tEv"></tbody></table></div>
   <div class="card"><h2>Ημερολόγιο πηγών</h2><div class="sub">Τι απάντησε στην τελευταία εκτέλεση του συλλέκτη.</div><div class="diag" id="diag">—</div></div>
 </div>
 <aside>
@@ -161,7 +161,9 @@ function render(){
   if(D.missing&&D.missing.length){w.style.display='block';w.textContent='Χωρίς τιμή (μετρούν 0): '+D.missing.join(', ')+'.';} else w.style.display='none';
   risk();
 }
+function loc(ts){return new Date(ts*1000).toLocaleString('el-GR',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});}
 function renderEvents(){
+  var tzEl=document.getElementById('tzname'); if(tzEl){try{tzEl.textContent=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){}}
   if(!D) return;
   var te=document.getElementById('tEv'); te.innerHTML='';
   var now=Date.now(), X=D.extra||{}, ev=D.events||[];
@@ -169,11 +171,11 @@ function renderEvents(){
   ev.forEach(function(e){
     var past=e.ts&&e.ts*1000<now, tr=document.createElement('tr');
     if(past) tr.style.opacity='0.5';
-    tr.innerHTML='<td class="val">'+e.t+(past?' <span class="src">· βγήκε</span>':'')+'</td><td>'+e.ccy+' · '+e.title+'</td><td>'+(e.forecast||'—')+'</td><td>'+(e.previous||'—')+'</td>';
+    tr.innerHTML='<td class="val">'+(e.ts?loc(e.ts):e.t)+' <span class="src">('+e.t.split(' ').slice(-2).join(' ')+')'+(past?' · βγήκε':'')+'</span></td><td>'+e.ccy+' · '+e.title+'</td><td>'+(e.forecast||'—')+'</td><td>'+(e.previous||'—')+'</td>';
     te.appendChild(tr);});
   var until=X.events_until?X.events_until*1000:null, horizon=now+48*3600e3;
   if(until&&until<horizon){
-    var dd=new Date(until), DN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], p=function(n){return (n<10?'0':'')+n;}; var d=DN[dd.getUTCDay()]+' '+p(dd.getUTCDate())+'/'+p(dd.getUTCMonth()+1)+' '+p(dd.getUTCHours())+':'+p(dd.getUTCMinutes())+' UTC';
+    var d=loc(until/1000);
     var tr=document.createElement('tr');
     tr.innerHTML='<td colspan="4" class="src" style="color:#a5672a">'+(ev.length?'':'Κανένα γεγονός μέχρι '+d+'. ')+'Η πηγή καλύπτει μέχρι '+d+' — για εκεί και μετά, άγνωστο. Τα γεγονότα της επόμενης εβδομάδας εμφανίζονται όταν η πηγή αλλάξει εβδομάδα.</td>';
     te.appendChild(tr);
