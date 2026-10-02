@@ -13,6 +13,10 @@
 """
 import csv, datetime as dt, json, os, re
 import requests
+from zoneinfo import ZoneInfo
+
+LOCAL_TZ = "Europe/Athens"   # η ώρα του χρήστη στα μηνύματα· αν αλλάξει χώρα, αλλάζει μόνο εδώ
+PAGE_URL = "https://kostasg9786-cmyk.github.io/pinakas-btc/"
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(ROOT, "data.json")
@@ -392,6 +396,20 @@ def flips(V, S, readings_meta):
         res["A"] = f"Το Α θέλει {need} βαθμούς για {target}· πιο κοντά: " + " · ".join(cands) + "."
     else:
         res["A"] = f"Το Α θέλει {need} βαθμούς για {target}."
+    bids = ("b1", "b2", "b3", "b4", "b5")
+    def tail(need, cands):
+        if not cands: return "."
+        if need == 1: return f"· αρκεί αν {cands[0]}."
+        return f"· θέλει {need} βαθμούς, πιο κοντά: " + " · ".join(cands) + "."
+    if S["eff"] != S["stA"]:
+        res["B"] = (f"Η όρεξη για ρίσκο (Β {S['sB']:+d}) ήδη ουδετεροποιεί το Α ({S['stA']}). "
+                    f"Αν το Β επιστρέψει μέσα στο ±1, το Α ξαναγίνεται ενεργό.")
+    elif S["stA"] == "Συρρίκνωση":
+        nB = 2 - S["sB"]
+        res["B"] = f"Το ενεργό καθεστώς γίνεται Ουδέτερο αν η όρεξη για ρίσκο (Β, τώρα {S['sB']:+d}) φτάσει +2" + tail(nB, near(bids, 1))
+    elif S["stA"] == "Επέκταση":
+        nB = S["sB"] + 2
+        res["B"] = f"Το ενεργό καθεστώς γίνεται Ουδέτερο αν η όρεξη για ρίσκο (Β, τώρα {S['sB']:+d}) πέσει στο −2" + tail(nB, near(bids, -1))
     cids = ("c1", "c2", "c3", "c4", "c5")
     upC, dnC = 3 - S["sC"], S["sC"] + 3
     if upC <= dnC: needC, targetC, dC = upC, "Συνωστισμός long", 1
@@ -440,6 +458,130 @@ def score(V):
             "stC": stC, "stD": stD, "flags": flags, "flush": flush,
             "cell": f"{eff} × {stC}", "mult": MULT[eff][stC], "stance": STANCE[eff][stC]}
 
+GR_DAYS = ["Δευ", "Τρί", "Τετ", "Πέμ", "Παρ", "Σάβ", "Κυρ"]
+
+def lt(ts):
+    d = dt.datetime.fromtimestamp(ts, ZoneInfo(LOCAL_TZ))
+    return f"{GR_DAYS[d.weekday()]} {d:%d/%m %H:%M}"
+
+def gnum(x, d=1, sign=False):
+    s = f"{x:+.{d}f}" if sign else f"{x:.{d}f}"
+    return s.replace(".", ",").replace("-", "−")
+
+def gm(m):
+    return f"{m:g}".replace(".", ",")
+
+def us_open_local(now):
+    o = now.astimezone(ZoneInfo("America/New_York")).replace(hour=9, minute=30, second=0, microsecond=0)
+    return o.astimezone(ZoneInfo(LOCAL_TZ)).strftime("%H:%M")
+
+PLAIN_A = {"Επέκταση": "Το χρήμα είναι άφθονο και φθηνό: ο άνεμος φυσάει υπέρ των ανόδων.",
+           "Ουδέτερο": "Το μακρο δεν δίνει καθαρή κατεύθυνση.",
+           "Συρρίκνωση": "Το χρήμα ακριβαίνει ή λιγοστεύει: ο άνεμος φυσάει κόντρα στις ανόδους."}
+PLAIN_C = {"Ισορροπία": "Κανείς δεν είναι φορτωμένος με μόχλευση στη μία πλευρά, άρα δεν υπάρχει έτοιμο καύσιμο για απότομη κίνηση από αναγκαστικά κλεισίματα.",
+           "Συνωστισμός long": "Πολλοί είναι ήδη long με μόχλευση: μια πτώση μπορεί να επιταχυνθεί από ρευστοποιήσεις.",
+           "Συνωστισμός short": "Πολλοί είναι short με μόχλευση: μια άνοδος μπορεί να επιταχυνθεί από κάλυψη (squeeze)."}
+A_NAMES = {"a1": ("πραγματικό επιτόκιο 10ετίας", "μ.β.", 0), "a2": ("καθαρή ρευστότητα", "%", 2),
+           "a4": ("δολάριο", "%", 2), "a5": ("spread υψηλού κινδύνου", "μ.β.", 0), "a6": ("απόδοση 2ετούς", "μ.β.", 0)}
+FLAG_TEXT = {"Ξέπλυμα": "Ξέπλυμα: η μόχλευση μόλις καθάρισε απότομα. Μετά από τέτοιο γεγονός η αγορά συνήθως ηρεμεί ή γυρίζει.",
+             "Γεγονός": "Τα options τιμολογούν ταραχή τις επόμενες μέρες: η κίνηση θα είναι μεγαλύτερη από τη συνηθισμένη.",
+             "Ζήτηση carry": "Μεγάλο μέρος της ζήτησης είναι carry (αντισταθμισμένο), όχι πεποίθηση· φεύγει γρήγορα αν πέσει το basis.",
+             "Όψιμη φάση": "Τα μικρότερα coins τρέχουν πολύ μπροστά: όψιμη φάση όρεξης για ρίσκο, η άνοδος γίνεται εύθραυστη."}
+
+def interpret(V, S, FL, hist, now):
+    eff, stA, stC = S["eff"], S["stA"], S["stC"]
+    if eff != stA:
+        plain = f"Το μακρο λέει «{stA}», αλλά η όρεξη για ρίσκο το αντικρούει, άρα καθαρή κατεύθυνση δεν υπάρχει. " + PLAIN_C[stC]
+    else:
+        plain = PLAIN_A[eff] + " " + PLAIN_C[stC]
+
+    short = [FLAG_TEXT[f] for f in S["flags"] if f in FLAG_TEXT]
+    c1 = V.get("c1")
+    if c1 is not None:
+        if c1 >= 25: short.append(f"Funding {gnum(c1)}% ετησίως: οι long πληρώνουν ακριβά για να μείνουν μέσα.")
+        elif c1 <= 0: short.append(f"Funding {gnum(c1)}% ετησίως: οι short πληρώνουν τους long, η αγορά γέρνει προς τα κάτω.")
+        else: short.append(f"Funding {gnum(c1)}% ετησίως (ουδέτερο ≈11%): κανείς δεν πληρώνει υπερβολικά για τη θέση του.")
+    e5 = V.get("e5")
+    if e5:
+        short.append(f"Τυπική ημερήσια κίνηση τώρα ≈{gnum(e5 / 365 ** 0.5)}%: κίνηση μέσα σε αυτό το εύρος είναι συνηθισμένη, και ένα stop πιο κοντά θα χτυπιέται από θόρυβο.")
+    e4 = V.get("e4")
+    if e4 is not None and e4 <= -5: short.append("Τα options υποτιμούν την κίνηση που ήδη γίνεται: η προστασία είναι φθηνή.")
+    elif e4 is not None and e4 >= 5: short.append("Η προστασία είναι ακριβή: η αγορά φοβάται περισσότερο απ' όσο κινείται.")
+    e1 = V.get("e1")
+    if e1 is not None and e1 > 0.6:
+        short.append(f"Από τις {us_open_local(now)} (άνοιγμα ΗΠΑ) το BTC κινείται μαζί με τις τεχνολογικές μετοχές: αν γυρίσουν εκείνες, συνήθως ακολουθεί.")
+    elif e1 is not None and e1 < 0.3:
+        short.append("Το BTC κινείται με δικούς του όρους· οι μετοχές λένε λίγα αυτές τις μέρες.")
+    e2, e3 = V.get("e2"), V.get("e3")
+    if e2 is not None and e3 is not None:
+        if e2 > 2 and e3 > 2: short.append("Οι μετοχές που συνδέονται με το BTC κινήθηκαν την τελευταία μέρα πιο θετικά από το ίδιο: η αγορά μετοχών το βλέπει καλύτερα.")
+        elif e2 < -2 and e3 < -2: short.append("Οι μετοχές που συνδέονται με το BTC κινήθηκαν την τελευταία μέρα πιο αρνητικά από το ίδιο: η αγορά μετοχών το βλέπει χειρότερα.")
+    nowts = now.timestamp(); groups = {}
+    for e in EXTRA.get("events", []):
+        if e["ts"] >= nowts: groups.setdefault(e["ts"], []).append(f"{e['ccy']} {e['title']}")
+    for ts in sorted(groups):
+        short.append(f"{lt(ts)}: " + ", ".join(groups[ts]) + ". Γύρω από αυτή την ώρα η κίνηση μπορεί να είναι απότομη.")
+    until = EXTRA.get("events_until")
+    if EXTRA.get("events_ok") is False:
+        short.append("Το ημερολόγιο γεγονότων δεν διαβάστηκε: τα γεγονότα είναι άγνωστα, όχι ανύπαρκτα.")
+    elif until and until < nowts + 48 * 3600:
+        short.append(f"Μετά τις {lt(until)} το ημερολόγιο δεν καλύπτει· έλεγξε τη δική σου ροή.")
+
+    medium = [f"Κατεύθυνση: {S['stance']} Ρίσκο ×{gm(S['mult'])} του βασικού σου R."]
+    against, pro = [], []
+    for i, (name, unit, d) in A_NAMES.items():
+        v, sc = V.get(i), S["sc"].get(i, 0)
+        if v is None or sc == 0: continue
+        (pro if sc > 0 else against).append(f"{name} {gnum(v, d, True)} {unit}")
+    if S["sc"].get("a7") == -1: against.append("πληθωρισμός που ανεβαίνει με σύσφιξη")
+    if S["sc"].get("a7") == 1: pro.append("πληθωρισμός που ανεβαίνει χωρίς σύσφιξη")
+    end = lambda t: t if t.endswith(".") else t + "."
+    if against: medium.append(end("Κόντρα στο BTC, σε 4 εβδομάδες: " + ", ".join(against)))
+    if pro: medium.append(end("Υπέρ του BTC, σε 4 εβδομάδες: " + ", ".join(pro)))
+    medium.append(f"Όρεξη για ρίσκο στις άλλες αγορές: {S['stB']} ({S['sB']:+d}).")
+    if FL.get("A"): medium.append(FL["A"])
+    if FL.get("B"): medium.append(FL["B"])
+
+    long = [f"Καθεστώς ρευστότητας: {stA} (σκορ {S['sA']:+d}, κλίμακα −6 έως +6). Για κεφάλαιο που κρατάς μήνες μετράει μόνο αυτό, όχι η τοποθέτηση."]
+    m = from_history(hist, "sA", 30)
+    if m is None:
+        first = hist[0]["date"][:10] if hist else now.date().isoformat()
+        ready = dt.date.fromisoformat(first) + dt.timedelta(days=30)
+        long.append(f"Η μηνιαία σύγκριση ξεκινά στις {ready:%d/%m}, όταν το ιστορικό κλείσει έναν μήνα. Μέχρι τότε η βαθμίδα έκθεσης δεν αλλάζει.")
+    else:
+        was = "Επέκταση" if m >= 3 else ("Συρρίκνωση" if m <= -3 else "Ουδέτερο")
+        if was == stA:
+            long.append(f"Και πριν από έναν μήνα ήταν {was}: δεύτερη συνεχόμενη μηνιαία ανάγνωση, άρα με τον κανόνα των δύο αναγνώσεων η βαθμίδα έκθεσης μπορεί να αλλάξει.")
+        else:
+            long.append(f"Πριν από έναν μήνα ήταν {was}: πρώτη μηνιαία ανάγνωση σε {stA}, η βαθμίδα έκθεσης δεν αλλάζει ακόμη.")
+    return {"plain": plain, "short": short, "medium": medium, "long": long}
+
+def tg_ready():
+    return bool(os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() and os.environ.get("TELEGRAM_CHAT_ID", "").strip())
+
+def tg_send(text, label):
+    tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(); cid = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                          json={"chat_id": cid, "text": text[:4000], "disable_web_page_preview": True}, timeout=20)
+        if r.status_code == 200:
+            log(label); return True
+        log(f"{label} — HTTP {r.status_code}", False); return False
+    except Exception as e:
+        log(f"{label} — {type(e).__name__}", False)   # ποτέ το κείμενο του σφάλματος: περιέχει το κλειδί
+        return False
+
+def brief_text(S, I, now):
+    p = [f"Πίνακας BTC — {lt(now.timestamp())}", f"{S['cell']} · ρίσκο ×{gm(S['mult'])}", S["stance"], "", "Με απλά λόγια: " + I["plain"]]
+    for t, k in (("ΤΙΣ ΕΠΟΜΕΝΕΣ ΩΡΕΣ – 2 ΜΕΡΕΣ", "short"), ("ΗΜΕΡΕΣ – ΕΒΔΟΜΑΔΕΣ", "medium"), ("ΜΗΝΕΣ", "long")):
+        if I[k]: p += ["", t] + ["• " + l for l in I[k]]
+    return "\n".join(p + ["", PAGE_URL])
+
+def alert_text(changes, S, I, now):
+    p = [f"Πίνακας BTC — ΑΛΛΑΓΗ ({lt(now.timestamp())})"] + ["• " + c for c in changes]
+    p += ["", f"Νέα εικόνα: {S['cell']} · ρίσκο ×{gm(S['mult'])}", S["stance"], "", "Με απλά λόγια: " + I["plain"], "", PAGE_URL]
+    return "\n".join(p)
+
 def main():
     for step in (derivs, options, basis, demand, macro, equities, calendar):
         try: step()
@@ -460,7 +602,7 @@ def main():
     prev = {}
     try:
         with open(DATA, encoding="utf-8") as f:
-            pj = json.load(f); prev = {"cell": pj["scores"]["cell"], "flags": pj.get("flags", [])}
+            pj = json.load(f); prev = {"cell": pj["scores"]["cell"], "flags": pj.get("flags", []), "brief_date": pj.get("brief_date")}
     except Exception:
         pass
 
@@ -480,11 +622,25 @@ def main():
         json.dump({"changed": bool(changes), "changes": changes, "cell": S["cell"], "mult": S["mult"],
                    "stance": S["stance"], "flags": S["flags"], "when": now.isoformat(timespec="seconds")}, f, ensure_ascii=False, indent=1)
 
+    try:
+        INTERP = interpret(V, S, FL, hist, now)
+    except Exception as e:
+        INTERP = {"plain": "", "short": [], "medium": [], "long": []}
+        log(f"ερμηνεία — {type(e).__name__} {str(e)[:60]}", False)
+    BRIEF = prev.get("brief_date") if prev else None
+    local_now = now.astimezone(ZoneInfo(LOCAL_TZ))
+    if tg_ready() and INTERP["plain"]:
+        if changes:
+            tg_send(alert_text(changes, S, INTERP, now), "telegram αλλαγή")
+        if local_now.hour >= 7 and BRIEF != local_now.date().isoformat():
+            if tg_send(brief_text(S, INTERP, now), "telegram πρωινή σύνοψη"):
+                BRIEF = local_now.date().isoformat()
+
     readings = [{"id": i, "layer": L, "label": lab, "unit": u, "rule": rule, "dec": dec,
                  "v": V[i], "src": SRC[i], "score": S["sc"][i]} for i, L, lab, u, rule, fn, dec in READINGS]
     out = {"generated": now.isoformat(timespec="seconds"), "readings": readings,
            "scores": {k: S[k] for k in ("sA", "sB", "sC", "sD", "stA", "stB", "eff", "stC", "stD", "cell", "mult", "stance", "flush")},
-           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL,
+           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF,
            "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l")]}
     with open(DATA, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
