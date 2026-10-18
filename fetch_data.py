@@ -408,6 +408,19 @@ def equities():
         for k, sym in (("vix_yf", "^VIX"), ("vix3_yf", "^VIX3M")):
             EXTRA[k] = {d.date().isoformat(): float(x) for d, x in px[sym].dropna().tail(10).items()}
     except Exception: pass
+    try:
+        r = px[["BTC-USD", "QQQ"]].dropna().pct_change().dropna().tail(30)
+        if len(r) >= 20: setv("e1", float(r["BTC-USD"].corr(r["QQQ"])), "μετοχές")
+        else: log(f"Ε1 — μόνο {len(r)} κοινές ημέρες BTC/QQQ", False)
+    except Exception as e: log(f"Ε1 — {type(e).__name__} {str(e)[:50]}", False)
+    def day(sym):
+        s2 = px[sym].dropna()
+        return (s2.iloc[-1] / s2.iloc[-2] - 1) * 100 if len(s2) >= 2 else None
+    for i, sym in (("e2", "MSTR"), ("e3", "COIN")):
+        try:
+            b, m = day("BTC-USD"), day(sym)
+            if b is not None and m is not None: setv(i, m - b, "μετοχές")
+        except Exception as e: log(f"{i.upper()} — {type(e).__name__} {str(e)[:50]}", False)
 
 def vix_check():
     """Β3: εφεδρεία και διασταύρωση από τις επίσημες σειρές της Cboe στη FRED
@@ -436,19 +449,6 @@ def vix_check():
     else:
         SRC["b3"] = SRC["b3t"] = f"μετοχές · ✓ FRED {dtag}"
         log(f"VIX διασταυρώθηκε με FRED ({dtag}, διαφορά {gap:.2f})")
-    try:
-        r = px[["BTC-USD", "QQQ"]].dropna().pct_change().dropna().tail(30)
-        if len(r) >= 20: setv("e1", float(r["BTC-USD"].corr(r["QQQ"])), "μετοχές")
-        else: log(f"Ε1 — μόνο {len(r)} κοινές ημέρες BTC/QQQ", False)
-    except Exception as e: log(f"Ε1 — {type(e).__name__} {str(e)[:50]}", False)
-    def day(sym):
-        s2 = px[sym].dropna()
-        return (s2.iloc[-1] / s2.iloc[-2] - 1) * 100 if len(s2) >= 2 else None
-    for i, sym in (("e2", "MSTR"), ("e3", "COIN")):
-        try:
-            b, m = day("BTC-USD"), day(sym)
-            if b is not None and m is not None: setv(i, m - b, "μετοχές")
-        except Exception as e: log(f"{i.upper()} — {type(e).__name__} {str(e)[:50]}", False)
 
 
 def liquidations():
