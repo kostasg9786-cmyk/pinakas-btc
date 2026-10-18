@@ -75,6 +75,13 @@ READINGS = [
     ("b4", "Β", "Β4 Νομίσματα αναδυόμενων έναντι δολαρίου, 4 εβδ.", "%", "+1 ≥+1,5 · −1 ≤−1,5", band(-1.5, 1.5), 2),
     ("b5", "Β", "Β5 Κυριαρχία BTC, 4 εβδ.", "μον.", "+1 ≤−2 · −1 ≥+2 · Όψιμη φάση ≤−5", band_inv(-2, 2), 2),
     ("b5l", "Β", "Β5β Κυριαρχία BTC, επίπεδο", "%", "", None, 2),
+    ("t1", "Τ", "Τ1 Τιμή BTC", "$", "", None, 0),
+    ("t2", "Τ", "Τ2 Απόσταση από τον μέσο όρο 50 ημερών", "%", "", None, 1),
+    ("t3", "Τ", "Τ3 Απόσταση από τον μέσο όρο 200 ημερών", "%", "", None, 1),
+    ("t4", "Τ", "Τ4 Απόσταση από τον μέσο όρο 200 εβδομάδων", "%", "", None, 1),
+    ("t5", "Τ", "Τ5 Απόσταση από το υψηλό 12 μηνών", "%", "", None, 1),
+    ("t6", "Τ", "Τ6 MVRV (αγοραία προς πραγματοποιημένη αξία)", "", "", None, 2),
+    ("t7", "Τ", "Τ7 Μήνες από το τελευταίο halving", "μήνες", "", None, 0),
     ("e1", "Ε", "Ε1 Συσχέτιση 30 ημερών BTC–τεχνολογικού δείκτη", "", "", None, 2),
     ("e2", "Ε", "Ε2 Εταιρεία-ταμείο μείον BTC, 1 ημέρα", "μον.%", "", None, 2),
     ("e3", "Ε", "Ε3 Ανταλλακτήριο μείον BTC, 1 ημέρα", "μον.%", "", None, 2),
@@ -100,6 +107,7 @@ def derivs():
     c = get("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400", "τιμή 7ημ (spot ΗΠΑ)")
     try:
         c = sorted(c, key=lambda x: x[0])
+        CLOSES[:] = [float(x[4]) for x in c]
         p0, p1 = float(c[-8][4]), float(c[-1][4])
         if p0 > 0: setv("c2p", (p1 / p0 - 1) * 100, "spot ΗΠΑ"); EXTRA["price"] = p1
         import math
@@ -292,6 +300,62 @@ def equities():
             if cn is not None: setv("e3", cn - b, "μετοχές")
     except Exception: pass
 
+CLOSES = []
+HALVING = dt.date(2024, 4, 20)
+
+def trend():
+    """Τάση και κύκλος. Πηγή: ημερήσια τιμή και MVRV από την ανοιχτή βάση on-chain δεδομένων
+    (≈4 χρόνια, για τον μέσο όρο 200 εβδομάδων). Εφεδρεία για τους μέσους όρους 50/200 ημερών:
+    τα 300 ημερήσια κλεισίματα του spot ΗΠΑ που τραβάει ήδη ο συλλέκτης."""
+    start = (dt.date.today() - dt.timedelta(days=1500)).isoformat()
+    j = get("https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc"
+            f"&metrics=PriceUSD,CapMVRVCur&frequency=1d&page_size=2000&start_time={start}", "τάση και αποτίμηση (on-chain)")
+    px, mv = [], None
+    for r in sorted((j or {}).get("data", []), key=lambda r: r.get("time", "")):
+        try: px.append(float(r["PriceUSD"]))
+        except Exception: continue
+        try: mv = float(r["CapMVRVCur"])
+        except Exception: pass
+    src = "on-chain"
+    if len(px) < 200 and len(CLOSES) >= 200:
+        px, src = list(CLOSES), "spot ΗΠΑ"
+    p = EXTRA.get("price") or (px[-1] if px else None)
+    if p: setv("t1", p, "spot ΗΠΑ" if EXTRA.get("price") else src)
+    def dist(n):
+        return None if (not p or len(px) < n) else (p / (sum(px[-n:]) / n) - 1) * 100
+    setv("t2", dist(50), src)
+    setv("t3", dist(200), src)
+    if len(px) >= 1400: setv("t4", dist(1400), src)
+    if p and len(px) >= 365: setv("t5", (p / max(px[-365:]) - 1) * 100, src)
+    if mv is not None: setv("t6", mv, "on-chain")
+    setv("t7", (dt.date.today() - HALVING).days / 30.44, "ημερολόγιο")
+
+def tnotes(V):
+    """Μία φράση ερμηνείας για κάθε ανάγνωση του Τ — για τη σελίδα."""
+    n = {}
+    t2, t3, t4, t5, t6, t7 = (V.get(k) for k in ("t2", "t3", "t4", "t5", "t6", "t7"))
+    if t2 is not None: n["t2"] = "πάνω από τον μέσο όρο: βραχυπρόθεσμη τάση ανοδική" if t2 > 0 else "κάτω από τον μέσο όρο: βραχυπρόθεσμη τάση πτωτική"
+    if t3 is not None: n["t3"] = "πάνω: η κύρια τάση είναι ανοδική" if t3 > 0 else "κάτω: η κύρια τάση είναι πτωτική"
+    if t4 is not None: n["t4"] = ("κάτω από τον μέσο όρο 200 εβδομάδων: ιστορικά σπάνιο, συνέπεσε με πάτους κύκλων" if t4 < 0
+                                  else "πάνω από τη γραμμή που ιστορικά λειτούργησε ως πάτος κύκλου")
+    if t5 is not None: n["t5"] = "πόσο απέχει η τιμή από το υψηλότερο κλείσιμο των τελευταίων 12 μηνών"
+    if t6 is not None: n["t6"] = mvrv_zone(t6)
+    if t7 is not None: n["t7"] = halving_phase(t7)
+    return n
+
+def mvrv_zone(v):
+    if v < 1: return "κάτω από 1: η αγορά συνολικά κάτω από το κόστος κτήσης — ιστορικά ζώνη πάτων"
+    if v < 2.4: return "μεσαία ζώνη: ούτε φθηνό ούτε ακριβό με ιστορικούς όρους"
+    if v < 3.5: return "ακριβό: πολλοί κάτοχοι σε μεγάλο κέρδος, αυξημένη πίεση πώλησης"
+    return "πάνω από 3,5: ιστορικά ζώνη κορυφών κύκλου"
+
+def halving_phase(m):
+    if m < 12: return "πρώιμη φάση μετά το halving"
+    if m < 18: return "το ιστορικό παράθυρο κορυφών (12–18 μήνες μετά)"
+    if m < 25: return "μετά το ιστορικό παράθυρο κορυφών"
+    if m < 32: return "το ιστορικό παράθυρο πάτων (25–30 μήνες μετά)"
+    return "πριν από το επόμενο halving· ιστορικά φάση ανάκαμψης"
+
 def calendar():
     """Γεγονότα υψηλής επίδρασης, επόμενες 48 ώρες. Η πηγή δημοσιεύει μόνο την τρέχουσα εβδομάδα·
     το αρχείο της επόμενης δίνει 404 σε κάθε έλεγχο και εφεδρικός διακομιστής δεν υπάρχει. Γι' αυτό
@@ -377,7 +441,8 @@ def flips(V, S, readings_meta):
             new, cur = fp[1], S["sc"][i]
             if (new - cur) * need_dir <= 0: continue
             word = "ανέβει πάνω από" if fp[0] > V[i] else "πέσει κάτω από"
-            out.append((fp[2] / max(abs(V[i]), 1), f"{m[2]} {word} {round(fp[0], m[6])} {m[3]} (τώρα {round(V[i], m[6])})"))
+            name = re.sub(r"^\S+\s", "", m[2]).lower()
+            out.append((fp[2] / max(abs(V[i]), 1), f"{name} {word} {gnum(fp[0], m[6])} {m[3]} (τώρα {gnum(V[i], m[6])})".replace("  ", " ")))
         out.sort(key=lambda x: x[0])
         return [t for _, t in out[:2]]
 
@@ -541,19 +606,33 @@ def interpret(V, S, FL, hist, now):
     medium.append(f"Όρεξη για ρίσκο στις άλλες αγορές: {S['stB']} ({S['sB']:+d}).")
     if FL.get("A"): medium.append(FL["A"])
     if FL.get("B"): medium.append(FL["B"])
+    t2, t3 = V.get("t2"), V.get("t3")
+    if t2 is not None and t3 is not None:
+        tr = "ανοδική" if (t2 > 0 and t3 > 0) else ("πτωτική" if (t2 < 0 and t3 < 0) else "μικτή")
+        medium.insert(1, f"Τάση τιμής: {tr} — {gnum(abs(t2))}% {'πάνω' if t2 > 0 else 'κάτω'} από τον μέσο όρο 50 ημερών, "
+                         f"{gnum(abs(t3))}% {'πάνω' if t3 > 0 else 'κάτω'} από τον μέσο όρο 200 ημερών.")
+        if eff == "Συρρίκνωση" and tr == "ανοδική":
+            medium.insert(2, "Σύγκρουση: το μακρο πιέζει, αλλά η τιμή είναι ακόμη σε ανοδική τάση. Το short θέλει επιβεβαίωση από τη δική σου δομή· μην το ανοίγεις μόνο επειδή το λέει το καθεστώς.")
+        elif eff == "Επέκταση" and tr == "πτωτική":
+            medium.insert(2, "Σύγκρουση: το μακρο στηρίζει, αλλά η τιμή είναι ακόμη σε πτωτική τάση. Το long θέλει επιβεβαίωση από τη δική σου δομή· μην το ανοίγεις μόνο επειδή το λέει το καθεστώς.")
+        elif eff != "Ουδέτερο":
+            medium.insert(2, "Η τάση της τιμής συμφωνεί με το μακρο: καθεστώς και κίνηση δείχνουν προς την ίδια κατεύθυνση.")
 
-    long = [f"Καθεστώς ρευστότητας: {stA} (σκορ {S['sA']:+d}, κλίμακα −6 έως +6). Για κεφάλαιο που κρατάς μήνες μετράει μόνο αυτό, όχι η τοποθέτηση."]
+    long = [f"Ρευστότητα: {stA} (σκορ {S['sA']:+d}, κλίμακα −6 έως +6). Για ορίζοντα μηνών μετράει αυτή και όχι η τοποθέτηση."]
+    t4, t5, t6, t7 = (V.get(k) for k in ("t4", "t5", "t6", "t7"))
+    if t6 is not None: long.append(f"Αποτίμηση: MVRV {gnum(t6, 2)} — {mvrv_zone(t6)}.")
+    if t4 is not None:
+        long.append(f"Τιμή {gnum(abs(t4))}% {'πάνω από' if t4 >= 0 else 'κάτω από'} τον μέσο όρο 200 εβδομάδων"
+                    + (", τη γραμμή που ιστορικά λειτούργησε ως πάτος κύκλου." if t4 >= 0 else ": ιστορικά σπάνιο, συνέπεσε με πάτους κύκλων."))
+    if t5 is not None: long.append(f"Η τιμή είναι {gnum(abs(t5))}% κάτω από το υψηλό των τελευταίων 12 μηνών.")
+    if t7 is not None: long.append(f"Κύκλος: {gnum(t7, 0)} μήνες από το τελευταίο halving — {halving_phase(t7)}. Τρεις κύκλοι μόνο: μοτίβο, όχι νόμος, και αδυνατίζει όσο μεγαλώνει η αγορά.")
     m = from_history(hist, "sA", 30)
-    if m is None:
-        first = hist[0]["date"][:10] if hist else now.date().isoformat()
-        ready = dt.date.fromisoformat(first) + dt.timedelta(days=30)
-        long.append(f"Η μηνιαία σύγκριση ξεκινά στις {ready:%d/%m}, όταν το ιστορικό κλείσει έναν μήνα. Μέχρι τότε η βαθμίδα έκθεσης δεν αλλάζει.")
-    else:
+    if m is not None:
         was = "Επέκταση" if m >= 3 else ("Συρρίκνωση" if m <= -3 else "Ουδέτερο")
         if was == stA:
-            long.append(f"Και πριν από έναν μήνα ήταν {was}: δεύτερη συνεχόμενη μηνιαία ανάγνωση, άρα με τον κανόνα των δύο αναγνώσεων η βαθμίδα έκθεσης μπορεί να αλλάξει.")
+            long.append(f"Η ρευστότητα ήταν «{was}» και πριν από έναν μήνα: δεύτερη συνεχόμενη μηνιαία ανάγνωση, άρα για μακροπρόθεσμη θέση η εικόνα θεωρείται επιβεβαιωμένη.")
         else:
-            long.append(f"Πριν από έναν μήνα ήταν {was}: πρώτη μηνιαία ανάγνωση σε {stA}, η βαθμίδα έκθεσης δεν αλλάζει ακόμη.")
+            long.append(f"Πριν από έναν μήνα η ρευστότητα ήταν «{was}»: πρώτη μηνιαία ανάγνωση σε «{stA}». Για μακροπρόθεσμη θέση περίμενε και τη δεύτερη πριν αλλάξεις κάτι.")
     return {"plain": plain, "short": short, "medium": medium, "long": long}
 
 def tg_ready():
@@ -583,7 +662,7 @@ def alert_text(changes, S, I, now):
     return "\n".join(p)
 
 def main():
-    for step in (derivs, options, basis, demand, macro, equities, calendar):
+    for step in (derivs, options, basis, demand, macro, equities, trend, calendar):
         try: step()
         except Exception as e: log(f"{step.__name__} — {type(e).__name__} {str(e)[:60]}", False)
     hist = read_history()
@@ -659,8 +738,8 @@ def main():
                  "v": V[i], "src": SRC[i], "score": S["sc"][i]} for i, L, lab, u, rule, fn, dec in READINGS]
     out = {"generated": now.isoformat(timespec="seconds"), "readings": readings,
            "scores": {k: S[k] for k in ("sA", "sB", "sC", "sD", "stA", "stB", "eff", "stC", "stD", "cell", "mult", "stance", "flush")},
-           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF, "stale": STALE,
-           "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l")]}
+           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF, "stale": STALE, "tnotes": tnotes(V),
+           "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l") and not i.startswith("t")]}
     with open(DATA, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     cols = ["date"] + IDS + ["oi_level", "price", "sA", "sB", "sC", "sD", "eff", "stC", "cell", "mult", "flags"]
