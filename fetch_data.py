@@ -355,6 +355,19 @@ def equities():
                           "ARKK", "SMH", "EMB", "MARA", "RIOT", "CLSK"],
                          period="4mo", interval="1d", progress=False, auto_adjust=True, group_by="column")["Close"].dropna(how="all")
         log("μετοχές και proxy (16 σειρές)")
+        # Σειρές που ήρθαν κενές (συνήθως περιορισμός ρυθμού): μία δεύτερη λήψη μόνο γι' αυτές, και δήλωση
+        want = ["IWM", "SPY", "SPHB", "SPLV", "^VIX", "^VIX3M", "QQQ", "BTC-USD", "MSTR", "COIN", "ARKK", "SMH", "EMB", "MARA", "RIOT", "CLSK"]
+        miss = [t for t in want if t not in px.columns or px[t].dropna().empty]
+        if miss:
+            try:
+                px2 = yf.download(miss, period="4mo", interval="1d", progress=False, auto_adjust=True, group_by="column")["Close"]
+                if not hasattr(px2, "columns"): px2 = px2.to_frame(miss[0])
+                for t in miss:
+                    if t in px2.columns and not px2[t].dropna().empty: px[t] = px2[t]
+            except Exception:
+                pass
+            miss = [t for t in want if t not in px.columns or px[t].dropna().empty]
+            if miss: log("μετοχές χωρίς δεδομένα: " + ", ".join(miss), False)
     except Exception as e:
         log(f"μετοχές — {type(e).__name__} {str(e)[:60]}", False); return
     def rel(a, b):
@@ -426,17 +439,16 @@ def vix_check():
     try:
         r = px[["BTC-USD", "QQQ"]].dropna().pct_change().dropna().tail(30)
         if len(r) >= 20: setv("e1", float(r["BTC-USD"].corr(r["QQQ"])), "μετοχές")
-    except Exception: pass
+        else: log(f"Ε1 — μόνο {len(r)} κοινές ημέρες BTC/QQQ", False)
+    except Exception as e: log(f"Ε1 — {type(e).__name__} {str(e)[:50]}", False)
     def day(sym):
         s2 = px[sym].dropna()
         return (s2.iloc[-1] / s2.iloc[-2] - 1) * 100 if len(s2) >= 2 else None
-    try:
-        b = day("BTC-USD")
-        if b is not None:
-            m, cn = day("MSTR"), day("COIN")
-            if m is not None: setv("e2", m - b, "μετοχές")
-            if cn is not None: setv("e3", cn - b, "μετοχές")
-    except Exception: pass
+    for i, sym in (("e2", "MSTR"), ("e3", "COIN")):
+        try:
+            b, m = day("BTC-USD"), day(sym)
+            if b is not None and m is not None: setv(i, m - b, "μετοχές")
+        except Exception as e: log(f"{i.upper()} — {type(e).__name__} {str(e)[:50]}", False)
 
 
 def liquidations():
