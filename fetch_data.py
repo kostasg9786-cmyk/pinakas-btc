@@ -11,7 +11,7 @@
 Κάθε πηγή είναι ανεξάρτητη: αν μία αποτύχει, η ανάγνωση μένει κενή (μετρά 0) και
 το ημερολόγιο πηγών λέει ποια. Τίποτα δεν σταματά το σύνολο.
 """
-import csv, datetime as dt, json, os, re
+import csv, datetime as dt, json, math, os, re
 import requests
 from zoneinfo import ZoneInfo
 
@@ -58,15 +58,21 @@ READINGS = [
     ("c4", "Γ", "Γ4 Λόγος OI put/call", "", "+1 ≤0,5 · −1 ≥0,9", band_inv(0.5, 0.9), 2),
     ("c5", "Γ", "Γ5 Basis τριμηνιαίου, ετησιοποιημένο", "%", "+1 ≥12 · −1 <3", band(3, 12, True), 1),
     ("f1", "Σ", "OI σε BTC, 2 ημέρες", "%", "Ξέπλυμα αν ≤ −15", None, 1),
+    ("f4", "Σ", "Ρευστοποιήσεις long, 24 ώρες", "$ εκ.", "Ξέπλυμα αν ≥ 3× των short", None, 1),
+    ("f5", "Σ", "Ρευστοποιήσεις short, 24 ώρες", "$ εκ.", "Squeeze αν ≥ 3× των long", None, 1),
     ("f2", "Σ", "IV 7 ημερών", "%", "Γεγονός αν IV7 ≥ IV30 + 5", None, 1),
     ("f3", "Σ", "IV 30 ημερών", "%", "", None, 1),
+    ("d1", "Δ", "Δ1 Καθαρές ροές ETF, 5 ημέρες", "$ εκ.", "+1 εισροές με basis <12% · −1 εκροές", None, 1),
     ("d2", "Δ", "Δ2 Premium ΗΠΑ έναντι offshore", "%", "+1 >0 · −1 <0", lambda x: 1 if x > 0 else (-1 if x < 0 else 0), 3),
     ("d3", "Δ", "Δ3 Προσφορά stablecoins, 30 ημέρες", "%", "+1 ≥+2 · −1 ≤−2", band(-2, 2), 2),
+    ("d4", "Δ", "Δ4 Καθαρές ροές ανταλλακτηρίων, 7 ημέρες", "BTC", "+1 καθαρή έξοδος · −1 καθαρή είσοδος", lambda x: 1 if x < 0 else (-1 if x > 0 else 0), 0),
     ("a1", "Α", "Α1 Πραγματικό επιτόκιο 10ετίας, 4 εβδ.", "μ.β.", "+1 ≤−10 · −1 ≥+10", band_inv(-10, 10), 1),
     ("a2", "Α", "Α2 Καθαρή ρευστότητα, 4 εβδ.", "%", "+1 ≥+1 · −1 ≤−1", band(-1, 1), 2),
+    ("a3", "Α", "Α3 Ισολογισμοί Fed + ΕΚΤ + Τρ. Ιαπωνίας σε δολάρια, 13 εβδ.", "%", "+1 ≥+1 · −1 ≤−1", band(-1, 1), 2),
     ("a4", "Α", "Α4 Δείκτης δολαρίου, 4 εβδ.", "%", "+1 ≤−1,5 · −1 ≥+1,5", band_inv(-1.5, 1.5), 2),
     ("a5", "Α", "Α5 Spread υψηλού κινδύνου, 4 εβδ.", "μ.β.", "+1 ≤−25 · −1 ≥+25", band_inv(-25, 25), 1),
-    ("a6", "Α", "Α6 Απόδοση 2ετούς, 4 εβδ.", "μ.β.", "+1 ≤−10 · −1 ≥+10", band_inv(-10, 10), 1),
+    ("a6", "Α", "Α6 Απόδοση 2ετούς, 4 εβδ. (με την καμπύλη)", "μ.β.", "+1 ≤−10 και η καμπύλη ανοίγει · −1 ≥+10 και η καμπύλη κλείνει", band_inv(-10, 10), 1),
+    ("a6c", "Α", "Α6β Καμπύλη 10ετούς − 2ετούς, μεταβολή 4 εβδ.", "μ.β.", "θετικό = ανοίγει", None, 1),
     ("a7", "Α", "Α7 Πληθωριστικό καθεστώς", "", "+1 πληθ. πάνω & πραγματικό δεν ανεβαίνει · −1 πληθ. πάνω & πραγματικό ανεβαίνει", lambda x: int(x), 0),
     ("b1", "Β", "Β1 Μικρές έναντι μεγάλων, 4 εβδ.", "%", "+1 ≥+2 · −1 ≤−2", band(-2, 2), 2),
     ("b2", "Β", "Β2 Υψηλό beta έναντι χαμηλής μετ., 4 εβδ.", "%", "+1 ≥+2 · −1 ≤−2", band(-2, 2), 2),
@@ -87,7 +93,29 @@ READINGS = [
     ("e3", "Ε", "Ε3 Ανταλλακτήριο μείον BTC, 1 ημέρα", "μον.%", "", None, 2),
     ("e4", "Ε", "Ε4 Ασφάλιστρο μεταβλητότητας (IV30 − πραγματοποιημένη)", "μον.", "", None, 1),
     ("e5", "Ε", "Ε5 Πραγματοποιημένη μεταβλητότητα 30 ημερών", "%", "", None, 1),
+    # Π — πληροφοριακές αναγνώσεις που ο οδηγός ονομάζει και το κεφάλαιο 9 δεν βαθμολογεί
+    ("p7", "Π", "Βήμα 1 · Οικονομική δραστηριότητα ΗΠΑ (CFNAI, μ.ό. 3 μηνών)", "", "", None, 2),
+    ("p6", "Π", "Βήμα 1 · Γιεν: USD/JPY, 4 εβδ.", "%", "", None, 2),
+    ("p1", "Π", "Βήμα 2 · Καινοτομία (ARKK) έναντι S&P 500, 4 εβδ.", "%", "", None, 2),
+    ("p2", "Π", "Βήμα 2 · Ημιαγωγοί (SMH) έναντι S&P 500, 4 εβδ.", "%", "", None, 2),
+    ("p3", "Π", "Βήμα 2 · Ομόλογα αναδυόμενων αγορών (EMB), 4 εβδ.", "%", "", None, 2),
+    ("p4", "Π", "Βήμα 2 · Χαλκός, 4 εβδ.", "%", "", None, 2),
+    ("p5", "Π", "Βήμα 2 · Χρυσός, 4 εβδ.", "%", "", None, 2),
+    ("p8", "Π", "Βήμα 3 · Κανάλια ευθυγραμμισμένα προς long", "από 6", "", None, 0),
+    ("p9", "Π", "Βήμα 3 · Κανάλια ευθυγραμμισμένα προς short", "από 6", "", None, 0),
+    ("p10", "Π", "Βήμα 3 · Μεταβολή IV 30 ημερών, 7 ημέρες", "μον.", "", None, 1),
+    ("p11", "Π", "Βήμα 3 · Μεταβλητότητα της μεταβλητότητας (DVOL, 30 ημ.)", "μον.", "", None, 2),
+    ("p12", "Π", "Βήμα 3 · Λόγος όγκου put/call, 24 ώρες", "", "", None, 2),
+    ("p13", "Π", "Βήμα 3 · Max pain της μεγάλης λήξης, απόσταση από την τιμή", "%", "", None, 1),
+    ("p14", "Π", "Βήμα 4 · ETH έναντι BTC, 7 ημέρες", "%", "", None, 2),
+    ("p15", "Π", "Βήμα 4 · Μετοχές εξορυκτών μείον BTC, 5 ημέρες", "μον.%", "", None, 2),
+    ("p16", "Π", "Βήμα 4 · CME futures έναντι spot", "%", "", None, 2),
+    ("p17", "Π", "Βήμα 4 · Κίνηση του spot από την τελευταία τιμή του CME", "%", "", None, 2),
+    ("p18", "Π", "Βήμα 4 · CFTC: καθαρή θέση leveraged funds στο CME", "BTC", "", None, 0),
+    ("p19", "Π", "Βήμα 4 · CFTC: μεταβολή εβδομάδας, leveraged funds", "BTC", "", None, 0),
+    ("p20", "Π", "Βήμα 4 · CFTC: καθαρή θέση asset managers στο CME", "BTC", "", None, 0),
 ]
+DERIVED = ("e4", "p8", "p9", "p10")   # υπολογίζονται από άλλες αναγνώσεις· δεν κρατούν προηγούμενη τιμή
 IDS = [r[0] for r in READINGS]
 V = {i: None for i in IDS}
 SRC = {i: "" for i in IDS}
@@ -149,7 +177,7 @@ def options():
     j = get(f"{DER}/get_book_summary_by_currency?currency=BTC&kind=option", "options")
     if not j or not j.get("result"): return
     now = dt.datetime.now(dt.timezone.utc)
-    rows, U, pOI, cOI = [], 0.0, 0.0, 0.0
+    rows, U, pOI, cOI, pV, cV = [], 0.0, 0.0, 0.0, 0.0, 0.0
     for o in j["result"]:
         m = re.match(r"BTC-(\d{1,2})([A-Z]{3})(\d{2})-(\d+)-([CP])$", o.get("instrument_name", ""))
         if not m: continue
@@ -161,11 +189,12 @@ def options():
         days = (exp - now).total_seconds() / 86400
         if days < 0.5: continue
         if o.get("underlying_price"): U = float(o["underlying_price"])
-        oi = float(o.get("open_interest") or 0)
-        if t == "P": pOI += oi
-        else: cOI += oi
-        rows.append((days, float(k), t, o.get("mark_iv")))
+        oi = float(o.get("open_interest") or 0); vol = float(o.get("volume") or 0)
+        if t == "P": pOI += oi; pV += vol
+        else: cOI += oi; cV += vol
+        rows.append((days, float(k), t, o.get("mark_iv"), float(o.get("underlying_price") or 0), oi, exp))
     if cOI > 0: setv("c4", pOI / cOI, "options")
+    if cV > 0: setv("p12", pV / cV, "options")
     if not rows or U <= 0: return
     def nearest(target):
         return min({r[0] for r in rows}, key=lambda x: abs(x - target))
@@ -173,8 +202,37 @@ def options():
         c = [r for r in rows if abs(r[0] - dexp) < 0.01 and r[2] == t and r[3]]
         return min(c, key=lambda r: abs(r[1] - strike))[3] if c else None
     e30, e7 = nearest(30), nearest(7)
-    ivc, ivp, atm30, atm7 = iv_at(e30, U * 1.10, "C"), iv_at(e30, U * 0.90, "P"), iv_at(e30, U, "C"), iv_at(e7, U, "C")
-    if ivc and ivp: setv("c3", ivc - ivp, "options")
+    atm30, atm7 = iv_at(e30, U, "C"), iv_at(e7, U, "C")
+    # Skew 25-delta όπως τον ορίζει ο οδηγός: delta Black-Scholes πάνω στο forward κάθε λήξης,
+    # από την τεκμαρτή μεταβλητότητα που δημοσιεύει η ίδια η αγορά. Γραμμική παρεμβολή στο 0,25.
+    def iv_at_delta(dexp, target, t):
+        pts = []
+        for r in rows:
+            if abs(r[0] - dexp) >= 0.01 or r[2] != t or not r[3] or r[4] <= 0: continue
+            T = r[0] / 365; sg = float(r[3]) / 100
+            if sg <= 0: continue
+            d1 = (math.log(r[4] / r[1]) + 0.5 * sg * sg * T) / (sg * math.sqrt(T))
+            dl = 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
+            pts.append((dl if t == "C" else dl - 1, float(r[3])))
+        pts.sort()
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if x0 <= target <= x1 and x1 > x0:
+                return y0 + (y1 - y0) * (target - x0) / (x1 - x0)
+        return None
+    ivc, ivp = iv_at_delta(e30, 0.25, "C"), iv_at_delta(e30, -0.25, "P")
+    if ivc and ivp: setv("c3", ivc - ivp, "options, 25-delta")
+    # Max pain: η λήξη με τις περισσότερες ανοικτές θέσεις μέσα σε 35 ημέρες
+    tot = {}
+    for r in rows:
+        if 1 <= r[0] <= 35: tot[r[0]] = tot.get(r[0], 0) + r[5]
+    if tot:
+        big = max(tot, key=tot.get); ex = [r for r in rows if abs(r[0] - big) < 0.01]
+        strikes = sorted({r[1] for r in ex})
+        def pain(k): return sum(r[5] * (max(0, k - r[1]) if r[2] == "C" else max(0, r[1] - k)) for r in ex)
+        mp = min(strikes, key=pain)
+        ref = EXTRA.get("price") or U
+        setv("p13", (mp / ref - 1) * 100, "options")
+        EXTRA["maxpain"] = {"strike": mp, "expiry": ex[0][6].strftime("%d/%m"), "oi_btc": round(tot[big])}
     if atm30: setv("f3", atm30, "options")
     if atm7: setv("f2", atm7, "options")
 
@@ -222,19 +280,21 @@ def demand():
     except Exception: pass
 
 FRED = {"real": "DFII10", "bs": "WALCL", "tga": "WTREGEN", "rrp": "RRPONTSYD",
-        "dxy": "DTWEXBGS", "hy": "BAMLH0A0HYM2", "y2": "DGS2", "be": "T10YIE", "emfx": "DTWEXEMEGS"}
+        "dxy": "DTWEXBGS", "hy": "BAMLH0A0HYM2", "y2": "DGS2", "y10": "DGS10", "be": "T10YIE", "emfx": "DTWEXEMEGS",
+        "ecb": "ECBASSETSW", "boj": "JPNASSETS", "eur": "DEXUSEU", "jpy": "DEXJPUS", "cfnai": "CFNAIMA3"}
+FRED_DAYS = {"ecb": 220, "boj": 260, "eur": 220, "jpy": 220, "cfnai": 200}
 
-def fred_series(code, label):
+def fred_series(code, label, days=120):
     key = os.environ.get("FRED_API_KEY", "").strip()
     out = []
     if key:
         j = get(f"https://api.stlouisfed.org/fred/series/observations?series_id={code}&api_key={key}"
-                f"&file_type=json&sort_order=asc&observation_start={(dt.date.today()-dt.timedelta(days=120)).isoformat()}", f"μακρο {label}")
+                f"&file_type=json&sort_order=asc&observation_start={(dt.date.today()-dt.timedelta(days=days)).isoformat()}", f"μακρο {label}")
         for o in (j or {}).get("observations", []):
             try: out.append((dt.date.fromisoformat(o["date"]), float(o["value"])))
             except Exception: pass
     if not out:
-        t = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}&cosd={(dt.date.today()-dt.timedelta(days=120)).isoformat()}", f"μακρο {label} (csv)", text=True, timeout=60)
+        t = get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}&cosd={(dt.date.today()-dt.timedelta(days=days)).isoformat()}", f"μακρο {label} (csv)", text=True, timeout=60)
         for line in (t or "").splitlines()[1:]:
             c = line.split(",")
             try: out.append((dt.date.fromisoformat(c[0]), float(c[1])))
@@ -248,7 +308,7 @@ def value_at(series, days_back):
     return cand[-1] if cand else None
 
 def macro():
-    S = {k: fred_series(code, k) for k, code in FRED.items()}
+    S = {k: fred_series(code, k, FRED_DAYS.get(k, 120)) for k, code in FRED.items()}
     def chg(k, mult=1.0):
         s = S[k]; prev = value_at(s, 28)
         return None if (not s or prev is None) else (s[-1][1] - prev) * mult
@@ -265,6 +325,23 @@ def macro():
     setv("a4", pct("dxy"), "μακρο")
     setv("a5", chg("hy", 100), "μακρο")
     setv("a6", chg("y2", 100), "μακρο")
+    # Καμπύλη 10ετούς − 2ετούς, μόνο σε ημέρες που υπάρχουν και οι δύο
+    d10 = dict(S["y10"]); cv = [(d, (d10[d] - v) * 100) for d, v in S["y2"] if d in d10]
+    pc = value_at(cv, 28)
+    if cv and pc is not None: setv("a6c", cv[-1][1] - pc, "μακρο")
+    # Α3: Fed (εκ. USD) + ΕΚΤ (εκ. EUR × USD/EUR) + Τρ. Ιαπωνίας (100 εκ. JPY × 100 ÷ JPY/USD), σε εκ. USD
+    def at(series, day):
+        c = [v for d, v in series if d <= day]
+        return c[-1] if c else None
+    if all(S[k] for k in ("bs", "ecb", "boj", "eur", "jpy")):
+        d0 = min(S["bs"][-1][0], S["ecb"][-1][0]); d1 = d0 - dt.timedelta(days=91)
+        def lvl(day):
+            x = [at(S[k], day) for k in ("bs", "ecb", "boj", "eur", "jpy")]
+            return None if None in x else x[0] + x[1] * x[3] + x[2] * 100 / x[4]
+        l0, l1 = lvl(d0), lvl(d1)
+        if l0 and l1: setv("a3", (l0 / l1 - 1) * 100, f"μακρο, έως {d0:%d/%m}")
+    setv("p6", pct("jpy"), "μακρο")
+    if S["cfnai"]: setv("p7", S["cfnai"][-1][1], f"μακρο, {S['cfnai'][-1][0]:%m/%Y}")
     em = pct("emfx")
     if em is not None: setv("b4", -em, "μακρο")
     be, rl = chg("be", 100), chg("real", 100)
@@ -274,9 +351,10 @@ def macro():
 def equities():
     try:
         import yfinance as yf
-        px = yf.download(["IWM", "SPY", "SPHB", "SPLV", "^VIX", "^VIX3M", "QQQ", "BTC-USD", "MSTR", "COIN"],
+        px = yf.download(["IWM", "SPY", "SPHB", "SPLV", "^VIX", "^VIX3M", "QQQ", "BTC-USD", "MSTR", "COIN",
+                          "ARKK", "SMH", "EMB", "HG=F", "GC=F", "MARA", "RIOT", "CLSK"],
                          period="4mo", interval="1d", progress=False, auto_adjust=True, group_by="column")["Close"].dropna(how="all")
-        log("μετοχές και proxy (10 σειρές)")
+        log("μετοχές και proxy (18 σειρές)")
     except Exception as e:
         log(f"μετοχές — {type(e).__name__} {str(e)[:60]}", False); return
     def rel(a, b):
@@ -285,6 +363,24 @@ def equities():
     try: setv("b1", rel("IWM", "SPY"), "μετοχές")
     except Exception: pass
     try: setv("b2", rel("SPHB", "SPLV"), "μετοχές")
+    except Exception: pass
+    def own(a):
+        s = px[a].dropna()
+        return (s.iloc[-1] / s.iloc[-21] - 1) * 100 if len(s) >= 21 else None
+    for i, a, b in (("p1", "ARKK", "SPY"), ("p2", "SMH", "SPY")):
+        try: setv(i, rel(a, b), "μετοχές")
+        except Exception: pass
+    for i, a in (("p3", "EMB"), ("p4", "HG=F"), ("p5", "GC=F")):
+        try: setv(i, own(a), "μετοχές")
+        except Exception: pass
+    try:
+        btc = px["BTC-USD"].dropna(); mv = []
+        for a in ("MARA", "RIOT", "CLSK"):
+            s2 = px[a].dropna()
+            if len(s2) < 6: continue
+            d1, d0 = s2.index[-1], s2.index[-6]
+            mv.append((s2.iloc[-1] / s2.iloc[-6] - 1) * 100 - (btc.asof(d1) / btc.asof(d0) - 1) * 100)
+        if mv: setv("p15", sum(mv) / len(mv), f"μετοχές ({len(mv)} εξορυκτές)")
     except Exception: pass
     try:
         v, v3 = px["^VIX"].dropna().iloc[-1], px["^VIX3M"].dropna().iloc[-1]
@@ -335,6 +431,119 @@ def vix_check():
             if cn is not None: setv("e3", cn - b, "μετοχές")
     except Exception: pass
 
+
+def liquidations():
+    """Ρευστοποιήσεις 24 ωρών, long και short. Δημόσια ροή ενός μεγάλου ανταλλακτηρίου παραγώγων
+    (perpetual BTC-USDT). Μία αγορά, όχι το σύνολο: ο λόγος long/short είναι ενδεικτικός της αγοράς."""
+    base = "https://www.okx.com/api/v5/public"
+    ct = 0.01
+    try:
+        j = requests.get(f"{base}/instruments?instType=SWAP&instId=BTC-USDT-SWAP", headers=UA, timeout=20).json()
+        ct = float(j["data"][0]["ctVal"])
+    except Exception:
+        pass
+    cut = dt.datetime.now(dt.timezone.utc).timestamp() * 1000 - 86400000
+    L = S = 0.0; after = ""; pages = 0; done = False
+    try:
+        while pages < 60 and not done:
+            u = f"{base}/liquidation-orders?instType=SWAP&uly=BTC-USDT&state=filled&limit=100" + (f"&after={after}" if after else "")
+            j = requests.get(u, headers=UA, timeout=20).json(); pages += 1
+            det = (j.get("data") or [{}])[0].get("details") or []
+            if not det: done = True; break
+            for x in det:
+                if float(x["ts"]) < cut: done = True; break
+                usd = float(x["sz"]) * ct * float(x["bkPx"])
+                if x.get("posSide") == "long": L += usd
+                elif x.get("posSide") == "short": S += usd
+            after = det[-1]["ts"]
+        if not done: raise RuntimeError("δεν κάλυψε 24 ώρες")
+        setv("f4", L / 1e6, "παράγωγα (1 αγορά)"); setv("f5", S / 1e6, "παράγωγα (1 αγορά)")
+        log(f"ρευστοποιήσεις 24ω ({pages} σελίδες)")
+    except Exception as e:
+        log(f"ρευστοποιήσεις — {type(e).__name__} {str(e)[:60]}", False)
+
+def etf_flows():
+    """Καθαρές ροές των spot ETF των ΗΠΑ, σε εκατομμύρια δολάρια, από δημόσιο ημερήσιο πίνακα.
+    Δημοσιεύονται με καθυστέρηση μίας ημέρας. Άθροισμα των 5 τελευταίων ημερών συναλλαγών."""
+    t = get("https://farside.co.uk/bitcoin-etf-flow-all-data/", "ροές ETF", text=True, timeout=40)
+    if not t: return
+    days = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
+        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)]
+        if len(cells) < 3: continue
+        try: d = dt.datetime.strptime(cells[0], "%d %b %Y").date()
+        except Exception: continue
+        tot = cells[-1].replace(",", "")
+        m = re.fullmatch(r"\((\d+(?:\.\d+)?)\)|(-?\d+(?:\.\d+)?)", tot)
+        if not m: continue                       # ημέρα που δεν έχει ακόμη δημοσιευτεί
+        days.append((d, -float(m.group(1)) if m.group(1) else float(m.group(2))))
+    days = sorted(dict(days).items())[-5:]
+    if len(days) == 5:
+        setv("d1", sum(v for _, v in days), f"ETF έως {days[-1][0]:%d/%m}")
+        EXTRA["etf_days"] = [[d.isoformat(), v] for d, v in days]
+    else:
+        log("ροές ETF — ο πίνακας δεν αναγνωρίστηκε", False)
+
+def exchange_flows():
+    """Καθαρές ροές BTC προς ανταλλακτήρια, 7 ημέρες, από την ανοιχτή βάση on-chain δεδομένων.
+    Οι τελευταίες τιμές είναι προκαταρκτικές (flash) και αναθεωρούνται λίγο."""
+    st = (dt.date.today() - dt.timedelta(days=12)).isoformat()
+    j = get("https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc"
+            f"&metrics=FlowInExNtv,FlowOutExNtv&frequency=1d&start_time={st}", "ροές ανταλλακτηρίων (on-chain)")
+    try:
+        r = sorted(j["data"], key=lambda x: x["time"])[-7:]
+        if len(r) == 7:
+            setv("d4", sum(float(x["FlowInExNtv"]) - float(x["FlowOutExNtv"]) for x in r), "on-chain")
+    except Exception:
+        pass
+
+def cftc():
+    """Εβδομαδιαίες θέσεις στο ρυθμιζόμενο futures BTC (αναφορά Traders in Financial Futures).
+    Μονάδα συμβολαίου: 5 BTC. Η αναφορά αφορά την Τρίτη και δημοσιεύεται την Παρασκευή."""
+    j = get("https://publicreporting.cftc.gov/resource/gpe5-46if.json?$where=cftc_contract_market_code=%27133741%27"
+            "&$order=report_date_as_yyyy_mm_dd%20DESC&$limit=1", "θέσεις CFTC")
+    try:
+        r = j[0]; f = lambda k: float(r[k]); tag = f"CFTC {r['report_date_as_yyyy_mm_dd'][8:10]}/{r['report_date_as_yyyy_mm_dd'][5:7]}"
+        setv("p18", (f("lev_money_positions_long") - f("lev_money_positions_short")) * 5, tag)
+        setv("p19", (f("change_in_lev_money_long") - f("change_in_lev_money_short")) * 5, tag)
+        setv("p20", (f("asset_mgr_positions_long") - f("asset_mgr_positions_short")) * 5, tag)
+    except Exception:
+        pass
+
+def crypto_extra():
+    """ETH έναντι BTC και μεταβλητότητα της μεταβλητότητας."""
+    c = get("https://api.exchange.coinbase.com/products/ETH-BTC/candles?granularity=86400", "ETH/BTC")
+    try:
+        c = sorted(c, key=lambda x: x[0]); setv("p14", (float(c[-1][4]) / float(c[-8][4]) - 1) * 100, "spot ΗΠΑ")
+    except Exception:
+        pass
+    now = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+    j = get(f"{DER}/get_volatility_index_data?currency=BTC&resolution=1D&start_timestamp={now - 40 * 86400000}&end_timestamp={now}", "δείκτης μεταβλητότητας")
+    try:
+        cl = [float(x[4]) for x in sorted(j["result"]["data"])][-31:]
+        dd = [b - a for a, b in zip(cl, cl[1:])]
+        if len(dd) >= 20:
+            mu = sum(dd) / len(dd); setv("p11", (sum((x - mu) ** 2 for x in dd) / (len(dd) - 1)) ** 0.5, "options")
+    except Exception:
+        pass
+
+def cme():
+    """Ρυθμιζόμενο futures (πρώτη λήξη) έναντι spot, σε ωριαία δεδομένα με την ίδια χρονοσφραγίδα."""
+    try:
+        import yfinance as yf
+        h = yf.download(["BTC=F", "BTC-USD"], period="7d", interval="60m", progress=False, auto_adjust=False, group_by="column")["Close"]
+        both = h.dropna()
+        if both.empty: raise RuntimeError("κενό")
+        ts = both.index[-1]
+        try: ts = ts.tz_convert("UTC")
+        except Exception: pass
+        setv("p16", (both["BTC=F"].iloc[-1] / both["BTC-USD"].iloc[-1] - 1) * 100, "CME, ώρα " + ts.strftime("%d/%m %H:%M"))
+        spot = h["BTC-USD"].dropna()
+        setv("p17", (spot.iloc[-1] / both["BTC-USD"].iloc[-1] - 1) * 100, "από " + ts.strftime("%d/%m %H:%M") + " UTC")
+        log("CME ωριαία")
+    except Exception as e:
+        log(f"CME — {type(e).__name__} {str(e)[:60]}", False)
+
 CLOSES = []
 HALVING = dt.date(2024, 4, 20)
 
@@ -376,6 +585,39 @@ def tnotes(V):
     if t5 is not None: n["t5"] = "πόσο απέχει η τιμή από το υψηλότερο κλείσιμο των τελευταίων 12 μηνών"
     if t6 is not None: n["t6"] = mvrv_zone(t6)
     if t7 is not None: n["t7"] = halving_phase(t7)
+    return n
+
+def pnotes(V):
+    """Μία φράση για κάθε πληροφοριακή ανάγνωση Π — η ανάγνωση του οδηγού, χωρίς δικό μας όριο."""
+    n = {}; g = V.get
+    def sg(v, up, dn): return up if v > 0 else (dn if v < 0 else "αμετάβλητο")
+    if g("p1") is not None: n["p1"] = sg(g("p1"), "η κερδοσκοπική όρεξη ανεβαίνει — κατά τον οδηγό συνοδεύει δύναμη στο BTC", "η κερδοσκοπική όρεξη υποχωρεί")
+    if g("p2") is not None: n["p2"] = sg(g("p2"), "οι ημιαγωγοί οδηγούν: όρεξη για ρίσκο", "οι ημιαγωγοί υστερούν: όρεξη για ρίσκο σε αναμονή")
+    if g("p3") is not None: n["p3"] = sg(g("p3"), "κεφάλαια αναζητούν απόδοση στις αναδυόμενες — θετικό κατά τον οδηγό", "φυγή από τις αναδυόμενες αγορές")
+    if g("p4") is not None: n["p4"] = sg(g("p4"), "τα μέταλλα ανάπτυξης ανεβαίνουν: ζήτηση για ρίσκο", "τα μέταλλα ανάπτυξης πέφτουν")
+    if g("p5") is not None: n["p5"] = "ο χρυσός αντιδρά στο ίδιο πραγματικό επιτόκιο και στην ίδια ρευστότητα· άνοδος μαζί με πτώση του Α1 επιβεβαιώνει το μακρο"
+    if g("p6") is not None: n["p6"] = sg(g("p6"), "το γιεν αποδυναμώνεται: η χρηματοδότηση carry μένει φθηνή", "το γιεν ενισχύεται: μεγάλες κινήσεις εδώ μεταδίδονται στο BTC (ξετύλιγμα carry)")
+    if g("p7") is not None:
+        v = g("p7"); n["p7"] = ("κάτω από −0,70: κατά την ίδια την πηγή, αυξημένη πιθανότητα ύφεσης" if v < -0.7 else
+                                ("πάνω από το μηδέν: ανάπτυξη πάνω από την τάση" if v > 0 else "κάτω από την τάση, χωρίς σήμα ύφεσης"))
+    for k in ("p8", "p9"):
+        if g(k) is not None: n[k] = "χρηματοδότηση, OI με τιμή, skew, μετοχή-ταμείο, ETF, μικρότερα coins — όσα περισσότερα ευθυγραμμίζονται, τόσο πιο εύθραυστο"
+    if g("p10") is not None and g("c2p") is not None:
+        iv, pr = g("p10"), g("c2p")
+        n["p10"] = ("η τιμή ανεβαίνει ενώ η τεκμαρτή μεταβλητότητα πέφτει: κατά τον οδηγό οι traders των options δεν πείθονται" if (pr > 0 and iv < 0) else
+                    ("η τιμή πέφτει χωρίς άνοδο της μεταβλητότητας: εφησυχασμός ή ρηχή πτώση" if (pr < 0 and iv <= 0) else
+                     "τιμή και μεταβλητότητα δεν αποκλίνουν"))
+    if g("p11") is not None: n["p11"] = "πόσο γρήγορα αλλάζει η αγορά γνώμη για τον κίνδυνο· άνοδος = ασταθές περιβάλλον"
+    if g("p12") is not None: n["p12"] = sg(g("p12") - 1, "περισσότερος όγκος σε puts: αντιστάθμιση ή στοιχήματα πτώσης", "περισσότερος όγκος σε calls: αισιοδοξία")
+    mp = EXTRA.get("maxpain")
+    if g("p13") is not None and mp: n["p13"] = f"λήξη {mp['expiry']}, max pain $" + f"{mp['strike']:,.0f}".replace(",", ".") + " — γύρω από μεγάλες λήξεις η τιμή συχνά έλκεται προς αυτή"
+    if g("p14") is not None: n["p14"] = sg(g("p14"), "το ETH οδηγεί: χρήμα κινείται προς τα έξω στην κρυπτο-καμπύλη", "το ETH υστερεί: φυγή προς την ποιότητα ή εκτός κρυπτο")
+    if g("p15") is not None: n["p15"] = sg(g("p15"), "οι εξορυκτές προηγούνται θετικά — μεγάλο beta, συχνά πριν από το BTC", "οι εξορυκτές προηγούνται αρνητικά")
+    if g("p16") is not None: n["p16"] = "η τιμή του ρυθμιζόμενου futures έναντι spot, την ίδια ώρα· περιλαμβάνει το basis της πρώτης λήξης"
+    if g("p17") is not None: n["p17"] = "όσο κινείται το spot όταν το CME είναι κλειστό, ανοίγει «κενό» που η αγορά συχνά κλείνει μετά το άνοιγμα"
+    if g("p18") is not None: n["p18"] = "net short εδώ είναι κυρίως το short σκέλος του carry (κεφ. 4), όχι κατ' ανάγκη στοίχημα πτώσης· διάβασέ το με το Γ5"
+    if g("p19") is not None: n["p19"] = sg(g("p19"), "τα leveraged funds έκλεισαν short ή άνοιξαν long", "τα leveraged funds πρόσθεσαν short")
+    if g("p20") is not None: n["p20"] = "οι θεσμικοί διαχειριστές: θετικό = καθαρά long"
     return n
 
 def mvrv_zone(v):
@@ -473,6 +715,9 @@ def flips(V, S, readings_meta):
             if i == "a7": continue
             m = meta[i]; fp = flip_point(m[5], V[i])
             if not fp: continue
+            if i == "a6" and fp[1] != 0:   # το 2ετές μετράει μόνο αν συμφωνεί η καμπύλη
+                cv = V.get("a6c")
+                if cv is None or (cv <= 0 if fp[1] > 0 else cv >= 0): continue
             new, cur = fp[1], S["sc"][i]
             if (new - cur) * need_dir <= 0: continue
             word = "ανέβει πάνω από" if fp[0] > V[i] else "πέσει κάτω από"
@@ -482,7 +727,7 @@ def flips(V, S, readings_meta):
         return [t for _, t in out[:2]]
 
     res = {}
-    aids = ("a1", "a2", "a4", "a5", "a6", "a7")
+    aids = ("a1", "a2", "a3", "a4", "a5", "a6", "a7")
     up, dn = 3 - S["sA"], S["sA"] + 3
     if up <= dn: need, target, d = up, "Επέκταση", 1
     else: need, target, d = dn, "Συρρίκνωση", -1
@@ -515,7 +760,7 @@ def flips(V, S, readings_meta):
     if upC <= dnC: needC, targetC, dC = upC, "Συνωστισμός long", 1
     else: needC, targetC, dC = dnC, "Συνωστισμός short", -1
     cC = near(cids, dC)
-    extra = "· ανάβει Ξέπλυμα αν το OI 2 ημερών πέσει κάτω από −15%"
+    extra = "· ανάβει Ξέπλυμα αν το OI 2 ημερών πέσει κάτω από −15% ή οι ρευστοποιήσεις long 24ώρου φτάσουν 3× των short"
     if needC <= 0:
         backC = near(cids, -dC)
         res["C"] = (f"Το Γ είναι ήδη {S['stC']}· φεύγει αν {backC[0]}{extra}." if backC else f"Το Γ είναι ήδη {S['stC']}{extra}.")
@@ -537,10 +782,17 @@ def score(V):
         term = V["b3t"]
         if V["b3"] < 18 and (term is None or term > 0): sc["b3"] = 1
         elif V["b3"] > 25 or (term is not None and term < 0): sc["b3"] = -1
-    sA = sum(sc[i] for i in ("a1", "a2", "a4", "a5", "a6", "a7"))
+    # Α6: το 2ετές μετράει μόνο όταν η καμπύλη κινείται προς την ίδια μεριά (κεφ. 9)
+    if sc["a6"] > 0 and not (V["a6c"] is not None and V["a6c"] > 0): sc["a6"] = 0
+    if sc["a6"] < 0 and not (V["a6c"] is not None and V["a6c"] < 0): sc["a6"] = 0
+    # Δ1: εισροές μετρούν +1 μόνο με γνωστό basis κάτω από 12%· εκροές −1
+    if V["d1"] is not None:
+        if V["d1"] < 0: sc["d1"] = -1
+        elif V["d1"] > 0 and V["c5"] is not None and V["c5"] < 12: sc["d1"] = 1
+    sA = sum(sc[i] for i in ("a1", "a2", "a3", "a4", "a5", "a6", "a7"))
     sB = sum(sc[i] for i in ("b1", "b2", "b3", "b4", "b5"))
     sC = sum(sc[i] for i in ("c1", "c2", "c3", "c4", "c5"))
-    sD = sum(sc[i] for i in ("d2", "d3"))
+    sD = sum(sc[i] for i in ("d1", "d2", "d3", "d4"))
     stA = "Επέκταση" if sA >= 3 else ("Συρρίκνωση" if sA <= -3 else "Ουδέτερο")
     stB = "Προς το ρίσκο" if sB >= 2 else ("Μακριά από το ρίσκο" if sB <= -2 else "Μικτό")
     eff = stA
@@ -549,8 +801,11 @@ def score(V):
     stC = "Συνωστισμός long" if sC >= 3 else ("Συνωστισμός short" if sC <= -3 else "Ισορροπία")
     stD = "Στήριξη παρούσα" if sD >= 2 else ("Στήριξη απούσα" if sD <= -2 else "Ουδέτερο")
     flags = []
-    flush = V["f1"] is not None and V["f1"] <= -15
+    L, Sh = V["f4"], V["f5"]
+    liq_flush = L is not None and Sh is not None and L > 0 and L >= 3 * Sh
+    flush = (V["f1"] is not None and V["f1"] <= -15) or liq_flush
     if flush: flags.append("Ξέπλυμα"); stC = "Ισορροπία"
+    if L is not None and Sh is not None and Sh > 0 and Sh >= 3 * L: flags.append("Squeeze")
     if V["f2"] is not None and V["f3"] is not None and V["f2"] >= V["f3"] + 5: flags.append("Γεγονός")
     if V["b5"] is not None and V["b5"] <= -5: flags.append("Όψιμη φάση")
     if V["c5"] is not None and V["c5"] >= 12: flags.append("Ζήτηση carry")
@@ -565,6 +820,7 @@ def lt(ts):
     return f"{GR_DAYS[d.weekday()]} {d:%d/%m %H:%M}"
 
 def gnum(x, d=1, sign=False):
+    x = round(x, d) + 0.0   # χωρίς «−0»
     s = f"{x:+.{d}f}" if sign else f"{x:.{d}f}"
     return s.replace(".", ",").replace("-", "−")
 
@@ -582,11 +838,18 @@ PLAIN_C = {"Ισορροπία": "Κανείς δεν είναι φορτωμέ�
            "Συνωστισμός long": "Πολλοί είναι ήδη long με μόχλευση: μια πτώση μπορεί να επιταχυνθεί από ρευστοποιήσεις.",
            "Συνωστισμός short": "Πολλοί είναι short με μόχλευση: μια άνοδος μπορεί να επιταχυνθεί από κάλυψη (squeeze)."}
 A_NAMES = {"a1": ("πραγματικό επιτόκιο 10ετίας", "μ.β.", 0), "a2": ("καθαρή ρευστότητα", "%", 2),
+           "a3": ("ισολογισμοί κεντρικών τραπεζών σε 13 εβδ.", "%", 2),
            "a4": ("δολάριο", "%", 2), "a5": ("spread υψηλού κινδύνου", "μ.β.", 0), "a6": ("απόδοση 2ετούς", "μ.β.", 0)}
 FLAG_TEXT = {"Ξέπλυμα": "Ξέπλυμα: η μόχλευση μόλις καθάρισε απότομα. Μετά από τέτοιο γεγονός η αγορά συνήθως ηρεμεί ή γυρίζει.",
              "Γεγονός": "Τα options τιμολογούν ταραχή τις επόμενες μέρες: η κίνηση θα είναι μεγαλύτερη από τη συνηθισμένη.",
              "Ζήτηση carry": "Μεγάλο μέρος της ζήτησης είναι carry (αντισταθμισμένο), όχι πεποίθηση· φεύγει γρήγορα αν πέσει το basis.",
-             "Όψιμη φάση": "Τα μικρότερα coins τρέχουν πολύ μπροστά: όψιμη φάση όρεξης για ρίσκο, η άνοδος γίνεται εύθραυστη."}
+             "Όψιμη φάση": "Τα μικρότερα coins τρέχουν πολύ μπροστά: όψιμη φάση όρεξης για ρίσκο, η άνοδος γίνεται εύθραυστη.",
+             "Squeeze": "Squeeze: οι short ρευστοποιούνται τριπλάσια από τους long. Η άνοδος τρέφεται από κάλυψη, όχι από νέο κεφάλαιο.",
+             "Ακραίο funding (οδηγός)": "Funding πάνω από 0,1% ανά 8 ώρες: ο οδηγός το χρησιμοποιεί ως σήμα κατοχύρωσης κέρδους στα long, ιδίως με OI στα υψηλά.",
+             "Φόβος στα options (οδηγός)": "Skew 25-delta κάτω από −10: κατά τον οδηγό ο φόβος είναι διάχυτος — συχνά πριν από ανακούφιση, όταν εξαντληθούν οι πωλητές.",
+             "Πανικός αντιστάθμισης (οδηγός)": "Το skew έπεσε πάνω από 5 μονάδες σε μια εβδομάδα ενώ η τιμή κρατά: ο οδηγός το διαβάζει ως πανικό αντιστάθμισης και αντίθετο σήμα αγοράς.",
+             "Άνοδος χωρίς ETF (οδηγός)": "Η τιμή ανεβαίνει χωρίς καθαρές εισροές ETF: κατά τον οδηγό η άνοδος ίσως στηρίζεται μόνο σε βραχυπρόθεσμη μόχλευση.",
+             "ETF αγοράζουν την πτώση (οδηγός)": "Η τιμή πέφτει αλλά τα ETF έχουν εισροές: κατά τον οδηγό, αγοραστές της υποχώρησης (θετική απόκλιση)."}
 
 def interpret(V, S, FL, hist, now):
     eff, stA, stC = S["eff"], S["stA"], S["stC"]
@@ -596,6 +859,7 @@ def interpret(V, S, FL, hist, now):
         plain = PLAIN_A[eff] + " " + PLAIN_C[stC]
 
     short = [FLAG_TEXT[f] for f in S["flags"] if f in FLAG_TEXT]
+    medium = []
     c1 = V.get("c1")
     if c1 is not None:
         if c1 >= 25: short.append(f"Funding {gnum(c1)}% ετησίως: οι long πληρώνουν ακριβά για να μείνουν μέσα.")
@@ -616,6 +880,20 @@ def interpret(V, S, FL, hist, now):
     if e2 is not None and e3 is not None:
         if e2 > 2 and e3 > 2: short.append("Οι μετοχές που συνδέονται με το BTC κινήθηκαν την τελευταία μέρα πιο θετικά από το ίδιο: η αγορά μετοχών το βλέπει καλύτερα.")
         elif e2 < -2 and e3 < -2: short.append("Οι μετοχές που συνδέονται με το BTC κινήθηκαν την τελευταία μέρα πιο αρνητικά από το ίδιο: η αγορά μετοχών το βλέπει χειρότερα.")
+    L, Sh = V.get("f4"), V.get("f5")
+    if L is not None and Sh is not None:
+        short.append(f"Ρευστοποιήσεις 24ώρου (μία αγορά): long {gnum(L)} εκ. δολάρια, short {gnum(Sh)} εκ. δολάρια"
+                     + (" — έκλεισαν κυρίως long." if L > Sh * 1.5 else (" — έκλεισαν κυρίως short." if Sh > L * 1.5 else " — χωρίς σαφή πλευρά.")))
+    d1 = V.get("d1")
+    if d1 is not None:
+        carry = V.get("c5") is not None and V["c5"] >= 12
+        medium.append(f"Ροές ETF 5 ημερών: {gnum(d1, 0, True)} εκ. δολάρια"
+                      + (" — με basis ≥12% μέρος τους είναι carry, όχι πεποίθηση." if (d1 > 0 and carry) else
+                         (" — γνήσια ζήτηση." if d1 > 0 else " — αποχώρηση ζήτησης.")))
+    p8, p9 = V.get("p8"), V.get("p9")
+    if p8 is not None and p9 is not None and max(p8, p9) >= 3:
+        side = "long" if p8 >= p9 else "short"
+        medium.append(f"{int(max(p8, p9))} από 6 κανάλια δείχνουν συνωστισμό {side}: όσο περισσότερα ευθυγραμμίζονται, τόσο μεγαλύτερη η κίνηση όταν γυρίσουν (οδηγός, ευθραυστότητα θέσεων).")
     nowts = now.timestamp(); groups = {}
     for e in EXTRA.get("events", []):
         if e["ts"] >= nowts: groups.setdefault(e["ts"], []).append(f"{e['ccy']} {e['title']}")
@@ -627,7 +905,7 @@ def interpret(V, S, FL, hist, now):
     elif until and until < nowts + 48 * 3600:
         short.append(f"Μετά τις {lt(until)} το ημερολόγιο δεν καλύπτει· έλεγξε τη δική σου ροή.")
 
-    medium = [f"Κατεύθυνση: {S['stance']} Ρίσκο ×{gm(S['mult'])} του βασικού σου R."]
+    medium[:0] = [f"Κατεύθυνση: {S['stance']} Ρίσκο ×{gm(S['mult'])} του βασικού σου R."]
     against, pro = [], []
     for i, (name, unit, d) in A_NAMES.items():
         v, sc = V.get(i), S["sc"].get(i, 0)
@@ -655,7 +933,7 @@ def interpret(V, S, FL, hist, now):
         elif tr == "μικτή" and eff != "Ουδέτερο":
             medium.insert(2, "Η τάση της τιμής είναι μικτή: ούτε επιβεβαιώνει ούτε αντικρούει το μακρο. Η κατεύθυνση ισχύει, αλλά χωρίς τη στήριξη της κίνησης.")
 
-    long = [f"Ρευστότητα: {stA} (σκορ {S['sA']:+d}, κλίμακα −6 έως +6). Για ορίζοντα μηνών μετράει αυτή και όχι η τοποθέτηση."]
+    long = [f"Ρευστότητα: {stA} (σκορ {S['sA']:+d}, κλίμακα −7 έως +7). Για ορίζοντα μηνών μετράει αυτή και όχι η τοποθέτηση."]
     t4, t5, t6, t7 = (V.get(k) for k in ("t4", "t5", "t6", "t7"))
     if t6 is not None: long.append(f"Αποτίμηση: MVRV {gnum(t6, 2)} — {mvrv_zone(t6)}.")
     if t4 is not None:
@@ -699,7 +977,8 @@ def alert_text(changes, S, I, now):
     return "\n".join(p)
 
 def main():
-    for step in (derivs, options, basis, demand, macro, equities, vix_check, trend, calendar):
+    for step in (derivs, options, basis, demand, macro, equities, vix_check, trend, calendar,
+                 liquidations, etf_flows, exchange_flows, cftc, crypto_extra, cme):
         try: step()
         except Exception as e: log(f"{step.__name__} — {type(e).__name__} {str(e)[:60]}", False)
     hist = read_history()
@@ -716,7 +995,7 @@ def main():
     # δηλωμένη ως προηγούμενη. Μια πηγή που πέφτει δεν πρέπει να αλλάζει το καθεστώς.
     STALE = []
     for i in IDS:
-        if V[i] is not None or i == "e4": continue   # το e4 υπολογίζεται από f3 και e5
+        if V[i] is not None or i in DERIVED: continue   # οι παράγωγες υπολογίζονται παρακάτω
         for r in reversed(hist):
             try:
                 age = (dt.date.today() - dt.date.fromisoformat(r["date"][:10])).days
@@ -731,6 +1010,8 @@ def main():
 
     if V["f3"] is not None and V["e5"] is not None:
         setv("e4", V["f3"] - V["e5"], "υπολογισμός")
+    f3p = from_history(hist, "f3", 7)
+    if V["f3"] is not None and f3p is not None: setv("p10", V["f3"] - f3p, "ιστορικό")
 
     prev = {}
     try:
@@ -740,6 +1021,21 @@ def main():
         pass
 
     S = score(V)
+    # Ευθυγράμμιση των έξι καναλιών του οδηγού (ενότητα «ευθραυστότητα θέσεων»)
+    sc = S["sc"]
+    ch_long = [sc["c1"] > 0, sc["c2"] > 0, sc["c3"] > 0, (V["e2"] or 0) > 2, (V["d1"] or 0) > 0, sc["b5"] > 0]
+    ch_short = [sc["c1"] < 0, sc["c2"] < 0, sc["c3"] < 0, (V["e2"] or 0) < -2, (V["d1"] or 0) < 0, sc["b5"] < 0]
+    setv("p8", sum(ch_long), "υπολογισμός"); setv("p9", sum(ch_short), "υπολογισμός")
+    # Σημαίες με τους αριθμούς που δίνει ο ίδιος ο οδηγός
+    if V["c1"] is not None and V["c1"] >= 0.1 * 3 * 365: S["flags"].append("Ακραίο funding (οδηγός)")
+    if V["c3"] is not None and V["c3"] <= -10: S["flags"].append("Φόβος στα options (οδηγός)")
+    c3p = from_history(hist, "c3", 7)
+    if V["c3"] is not None and c3p is not None and V["c3"] - c3p <= -5 and (V["c2p"] or 0) >= 0:
+        S["flags"].append("Πανικός αντιστάθμισης (οδηγός)")
+    if V["d1"] is not None and len(CLOSES) >= 6:
+        p5 = (CLOSES[-1] / CLOSES[-6] - 1) * 100
+        if p5 > 0 and V["d1"] <= 0: S["flags"].append("Άνοδος χωρίς ETF (οδηγός)")
+        if p5 < 0 and V["d1"] > 0: S["flags"].append("ETF αγοράζουν την πτώση (οδηγός)")
     FL = flips(V, S, READINGS)
     now = dt.datetime.now(dt.timezone.utc)
 
@@ -775,8 +1071,8 @@ def main():
                  "v": V[i], "src": SRC[i], "score": S["sc"][i]} for i, L, lab, u, rule, fn, dec in READINGS]
     out = {"generated": now.isoformat(timespec="seconds"), "readings": readings,
            "scores": {k: S[k] for k in ("sA", "sB", "sC", "sD", "stA", "stB", "eff", "stC", "stD", "cell", "mult", "stance", "flush")},
-           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF, "stale": STALE, "tnotes": tnotes(V),
-           "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l") and not i.startswith("t")]}
+           "flags": S["flags"], "extra": EXTRA, "events": EXTRA.get("events", []), "log": LOG, "changes": changes, "flips": FL, "interp": INTERP, "brief_date": BRIEF, "stale": STALE, "tnotes": tnotes(V), "pnotes": pnotes(V),
+           "missing": [i for i in IDS if V[i] is None and i not in ("b3t", "b5l", "a6c", "f4", "f5") and not i.startswith(("t", "p"))]}
     with open(DATA, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     cols = ["date"] + IDS + ["oi_level", "price", "sA", "sB", "sC", "sD", "eff", "stC", "cell", "mult", "flags"]
