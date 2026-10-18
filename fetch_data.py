@@ -352,9 +352,9 @@ def equities():
     try:
         import yfinance as yf
         px = yf.download(["IWM", "SPY", "SPHB", "SPLV", "^VIX", "^VIX3M", "QQQ", "BTC-USD", "MSTR", "COIN",
-                          "ARKK", "SMH", "EMB", "HG=F", "GC=F", "MARA", "RIOT", "CLSK"],
+                          "ARKK", "SMH", "EMB", "MARA", "RIOT", "CLSK"],
                          period="4mo", interval="1d", progress=False, auto_adjust=True, group_by="column")["Close"].dropna(how="all")
-        log("μετοχές και proxy (18 σειρές)")
+        log("μετοχές και proxy (16 σειρές)")
     except Exception as e:
         log(f"μετοχές — {type(e).__name__} {str(e)[:60]}", False); return
     def rel(a, b):
@@ -370,9 +370,16 @@ def equities():
     for i, a, b in (("p1", "ARKK", "SPY"), ("p2", "SMH", "SPY")):
         try: setv(i, rel(a, b), "μετοχές")
         except Exception: pass
-    for i, a in (("p3", "EMB"), ("p4", "HG=F"), ("p5", "GC=F")):
-        try: setv(i, own(a), "μετοχές")
-        except Exception: pass
+    try: setv("p3", own("EMB"), "μετοχές")
+    except Exception: pass
+    # Εμπορεύματα σε χωριστή λήψη: τα futures έχουν άλλο ωράριο και χαλούν την ευθυγράμμιση ημερομηνιών
+    try:
+        fx = yf.download(["HG=F", "GC=F"], period="4mo", interval="1d", progress=False, auto_adjust=True, group_by="column")["Close"]
+        for i, a in (("p4", "HG=F"), ("p5", "GC=F")):
+            s3 = fx[a].dropna()
+            if len(s3) >= 21: setv(i, (s3.iloc[-1] / s3.iloc[-21] - 1) * 100, "εμπορεύματα")
+    except Exception as e:
+        log(f"εμπορεύματα — {type(e).__name__} {str(e)[:60]}", False)
     try:
         btc = px["BTC-USD"].dropna(); mv = []
         for a in ("MARA", "RIOT", "CLSK"):
@@ -465,7 +472,21 @@ def liquidations():
 def etf_flows():
     """Καθαρές ροές των spot ETF των ΗΠΑ, σε εκατομμύρια δολάρια, από δημόσιο ημερήσιο πίνακα.
     Δημοσιεύονται με καθυστέρηση μίας ημέρας. Άθροισμα των 5 τελευταίων ημερών συναλλαγών."""
-    t = get("https://farside.co.uk/bitcoin-etf-flow-all-data/", "ροές ETF", text=True, timeout=40)
+    key = os.environ.get("SOSOVALUE_API_KEY", "").strip()
+    if key:
+        try:
+            r = requests.get("https://openapi.sosovalue.com/openapi/v1/etfs/summary-history?symbol=BTC&country_code=US&limit=10",
+                             headers={"x-soso-api-key": key, **UA}, timeout=30)
+            j = r.json(); rows = j.get("data", j) if isinstance(j, dict) else j
+            rows = sorted(rows, key=lambda x: x["date"])[-5:]
+            if len(rows) == 5:
+                setv("d1", sum(float(x["total_net_inflow"]) for x in rows) / 1e6, f"ETF έως {rows[-1]['date'][8:10]}/{rows[-1]['date'][5:7]}")
+                EXTRA["etf_days"] = [[x["date"], float(x["total_net_inflow"]) / 1e6] for x in rows]
+                log("ροές ETF (κλειδί)"); return
+            log(f"ροές ETF (κλειδί) — απάντηση χωρίς 5 ημέρες: {str(j)[:80]}", False)
+        except Exception as e:
+            log(f"ροές ETF (κλειδί) — {type(e).__name__} {str(e)[:60]}", False)   # ποτέ το κλειδί στο ημερολόγιο
+    t = get("https://farside.co.uk/bitcoin-etf-flow-all-data/", "ροές ETF (δημόσιος πίνακας)", text=True, timeout=40)
     if not t: return
     days = []
     for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
@@ -614,7 +635,7 @@ def pnotes(V):
     if g("p14") is not None: n["p14"] = sg(g("p14"), "το ETH οδηγεί: χρήμα κινείται προς τα έξω στην κρυπτο-καμπύλη", "το ETH υστερεί: φυγή προς την ποιότητα ή εκτός κρυπτο")
     if g("p15") is not None: n["p15"] = sg(g("p15"), "οι εξορυκτές προηγούνται θετικά — μεγάλο beta, συχνά πριν από το BTC", "οι εξορυκτές προηγούνται αρνητικά")
     if g("p16") is not None: n["p16"] = "η τιμή του ρυθμιζόμενου futures έναντι spot, την ίδια ώρα· περιλαμβάνει το basis της πρώτης λήξης"
-    if g("p17") is not None: n["p17"] = "όσο κινείται το spot όταν το CME είναι κλειστό, ανοίγει «κενό» που η αγορά συχνά κλείνει μετά το άνοιγμα"
+    if g("p17") is not None: n["p17"] = "κενό σχηματίζεται μόνο όταν το CME είναι κλειστό· αν διαπραγματεύεται και το Σαββατοκύριακο, μένει κοντά στο μηδέν"
     if g("p18") is not None: n["p18"] = "net short εδώ είναι κυρίως το short σκέλος του carry (κεφ. 4), όχι κατ' ανάγκη στοίχημα πτώσης· διάβασέ το με το Γ5"
     if g("p19") is not None: n["p19"] = sg(g("p19"), "τα leveraged funds έκλεισαν short ή άνοιξαν long", "τα leveraged funds πρόσθεσαν short")
     if g("p20") is not None: n["p20"] = "οι θεσμικοί διαχειριστές: θετικό = καθαρά long"
