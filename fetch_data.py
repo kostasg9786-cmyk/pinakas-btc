@@ -181,9 +181,13 @@ def options():
 def basis():
     j = get(f"{DER}/get_instruments?currency=BTC&kind=future&expired=false", "futures με λήξη")
     if not j or not j.get("result"): return
-    fut = [f for f in j["result"] if f.get("settlement_period") != "perpetual"]
+    # Τριμηνιαίο = λήξη Μαρ/Ιουν/Σεπ/Δεκ. Παίρνουμε το πλησιέστερο με τουλάχιστον 30 μέρες ζωής
+    now_ms = dt.datetime.now(dt.timezone.utc).timestamp() * 1000
+    fut = [f for f in j["result"] if f.get("settlement_period") != "perpetual"
+           and dt.datetime.fromtimestamp(f["expiration_timestamp"] / 1000, dt.timezone.utc).month in (3, 6, 9, 12)
+           and f["expiration_timestamp"] - now_ms >= 30 * 86400000]
     if not fut: return
-    far = max(fut, key=lambda f: f["expiration_timestamp"])
+    far = min(fut, key=lambda f: f["expiration_timestamp"])
     t = get(f"{DER}/ticker?instrument_name={far['instrument_name']}", f"basis {far['instrument_name']}")
     try:
         r = t["result"]; mk = r.get("mark_price") or r.get("last_price"); ix = r["index_price"]
@@ -253,10 +257,11 @@ def macro():
         return None if (not s or not prev) else (s[-1][1] / prev - 1) * 100
     setv("a1", chg("real", 100), "μακρο")
     if S["bs"] and S["tga"] and S["rrp"]:
-        n0 = S["bs"][-1][1] - S["tga"][-1][1] - S["rrp"][-1][1]
+        # WALCL και WTREGEN σε εκατομμύρια USD, RRPONTSYD σε δισεκατομμύρια: μετατροπή σε εκατομμύρια
+        n0 = S["bs"][-1][1] - S["tga"][-1][1] - S["rrp"][-1][1] * 1000
         p = [value_at(S[k], 28) for k in ("bs", "tga", "rrp")]
-        if None not in p and (p[0] - p[1] - p[2]) != 0:
-            setv("a2", (n0 / (p[0] - p[1] - p[2]) - 1) * 100, "μακρο")
+        if None not in p and (p[0] - p[1] - p[2] * 1000) != 0:
+            setv("a2", (n0 / (p[0] - p[1] - p[2] * 1000) - 1) * 100, "μακρο")
     setv("a4", pct("dxy"), "μακρο")
     setv("a5", chg("hy", 100), "μακρο")
     setv("a6", chg("y2", 100), "μακρο")
