@@ -289,7 +289,37 @@ def equities():
     try:
         v, v3 = px["^VIX"].dropna().iloc[-1], px["^VIX3M"].dropna().iloc[-1]
         setv("b3", v, "μετοχές"); setv("b3t", v3 - v, "μετοχές")
+        for k, sym in (("vix_yf", "^VIX"), ("vix3_yf", "^VIX3M")):
+            EXTRA[k] = {d.date().isoformat(): float(x) for d, x in px[sym].dropna().tail(10).items()}
     except Exception: pass
+
+def vix_check():
+    """Β3: εφεδρεία και διασταύρωση από τις επίσημες σειρές της Cboe στη FRED
+    (VIXCLS, VXVCLS — κλείσιμο ημέρας, συνήθως με καθυστέρηση μίας μέρας).
+    Αν η κύρια πηγή έπεσε, η FRED γίνεται πηγή. Αν δουλεύουν και οι δύο, συγκρίνονται
+    στην πιο πρόσφατη κοινή ημέρα και η ασυμφωνία δηλώνεται, δεν διορθώνεται σιωπηλά."""
+    fv = {d.isoformat(): x for d, x in fred_series("VIXCLS", "VIX")}
+    f3 = {d.isoformat(): x for d, x in fred_series("VXVCLS", "VIX 3 μηνών")}
+    common = sorted(set(fv) & set(f3))
+    if not common:
+        log("VIX στη FRED — καμία τιμή", False); return
+    last = common[-1]; tag = f"{last[8:10]}/{last[5:7]}"
+    if V["b3"] is None:
+        setv("b3", fv[last], f"FRED, κλείσιμο {tag}"); setv("b3t", f3[last] - fv[last], f"FRED, κλείσιμο {tag}")
+        log(f"Β3 από FRED (κλείσιμο {tag}), επειδή η κύρια πηγή δεν απάντησε"); return
+    yv, y3 = EXTRA.get("vix_yf") or {}, EXTRA.get("vix3_yf") or {}
+    both = sorted(set(yv) & set(y3) & set(common))
+    if not both:
+        log("VIX — καμία κοινή ημέρα για διασταύρωση με FRED", False); return
+    d = both[-1]; dtag = f"{d[8:10]}/{d[5:7]}"
+    gap, gap3 = abs(yv[d] - fv[d]), abs(y3[d] - f3[d])
+    if gap > 0.25 or gap3 > 0.25:
+        EXTRA["vix_mismatch"] = {"date": d, "yahoo": [yv[d], y3[d]], "fred": [fv[d], f3[d]]}
+        SRC["b3"] = SRC["b3t"] = f"μετοχές · ΑΣΥΜΦΩΝΙΑ με FRED {dtag}"
+        log(f"VIX {dtag}: Yahoo {yv[d]:.2f}/{y3[d]:.2f} έναντι FRED {fv[d]:.2f}/{f3[d]:.2f}", False)
+    else:
+        SRC["b3"] = SRC["b3t"] = f"μετοχές · ✓ FRED {dtag}"
+        log(f"VIX διασταυρώθηκε με FRED ({dtag}, διαφορά {gap:.2f})")
     try:
         r = px[["BTC-USD", "QQQ"]].dropna().pct_change().dropna().tail(30)
         if len(r) >= 20: setv("e1", float(r["BTC-USD"].corr(r["QQQ"])), "μετοχές")
@@ -669,7 +699,7 @@ def alert_text(changes, S, I, now):
     return "\n".join(p)
 
 def main():
-    for step in (derivs, options, basis, demand, macro, equities, trend, calendar):
+    for step in (derivs, options, basis, demand, macro, equities, vix_check, trend, calendar):
         try: step()
         except Exception as e: log(f"{step.__name__} — {type(e).__name__} {str(e)[:60]}", False)
     hist = read_history()
