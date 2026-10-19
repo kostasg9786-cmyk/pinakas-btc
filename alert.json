@@ -1,12 +1,13 @@
 {
- "changed": false,
- "changes": [],
+ "changed": true,
+ "changes": [
+  "Έσβησε η σημαία: Squeeze"
+ ],
  "cell": "Συρρίκνωση × Ισορροπία",
  "mult": 0.5,
  "stance": "Short στα ράλι.",
  "flags": [
-  "Squeeze",
   "Άνοδος χωρίς ETF (οδηγός)"
  ],
- "when": "2026-10-19T15:31:22+00:00"
+ "when": "2026-10-19T20:59:43+00:00"
 }
