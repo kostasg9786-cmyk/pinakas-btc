@@ -1,0 +1,39 @@
+name: Fylakas BTC
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ["phylakas.py", ".github/workflows/phylakas.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: phylakas
+  cancel-in-progress: false
+jobs:
+  epitirisi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Προηγούμενη κατάσταση
+        uses: actions/cache/restore@v4
+        with:
+          path: phylakas_state.json
+          key: phylakas-state-${{ github.run_id }}
+          restore-keys: phylakas-state-
+      - run: python phylakas.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: Αποθήκευση κατάστασης
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: phylakas_state.json
+          key: phylakas-state-${{ github.run_id }}
