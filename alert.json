@@ -1,13 +1,11 @@
 {
- "changed": true,
- "changes": [
-  "Νέα σημαία: Squeeze"
- ],
+ "changed": false,
+ "changes": [],
  "cell": "Συρρίκνωση × Ισορροπία",
  "mult": 0.5,
  "stance": "Short στα ράλι.",
  "flags": [
   "Squeeze"
  ],
- "when": "2026-10-21T04:31:31+00:00"
+ "when": "2026-10-21T10:02:57+00:00"
 }
