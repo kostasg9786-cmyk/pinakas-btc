@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Φρουρός BTC — ειδοποίηση μόνο όταν υπάρχει ισχυρή ένδειξη ή ακραίο γεγονός.
+"""Φρουρός BTC — κάρτα απόφασης στο Telegram, μόνο όταν αλλάζει κάτι που σε αφορά.
 
-Συμπληρώνει τον Πίνακα BTC χωρίς να τον αλλάζει: διαβάζει μόνο το alert.json του
-Πίνακα για να γράφει στο μήνυμα την εικόνα καθεστώτος.
+Συμπληρώνει τον Πίνακα BTC χωρίς να τον αλλάζει: διαβάζει μόνο το data.json/alert.json
+του Πίνακα για το καθεστώς και τον πολλαπλασιαστή ρίσκου.
 
-Δύο είδη ειδοποίησης (κανόνες και πηγές: phylakas_kanones.md)
-  ΙΣΧΥΡΗ ΕΝΔΕΙΞΗ  η τιμή βρίσκεται σε επίπεδο που βγαίνει από τη δομή ΚΑΙ τουλάχιστον
-                  δύο ανεξάρτητες οικογένειες στοιχείων (order flow, μόχλευση, ρευστότητα
-                  βιβλίου) έδωσαν στοιχείο τα τελευταία 30 λεπτά, χωρίς καμία να δείχνει
-                  αντίθετα
-  ΑΚΡΑΙΟ ΓΕΓΟΝΟΣ  κασκάδα ρευστοποιήσεων, πέρασμα zero gamma, απότομη κίνηση
+Κάθε μήνυμα είναι μία κάρτα με τέσσερα πράγματα (κανόνες και πηγές: phylakas_kanones.md)
+  ΡΙΣΚΟ       πολλαπλάσιο του βασικού σου R: βάση ο Πίνακας, μειώσεις για zero gamma,
+              γεγονός macro υψηλής επίπτωσης, σοκ ρευστοποιήσεων ή απότομης κίνησης
+  ΠΛΕΥΡΑ      ποια κατεύθυνση δείχνουν τα στοιχεία (επίπεδο + 2 ανεξάρτητες οικογένειες)
+  ΖΩΝΕΣ       η πλησιέστερη ζώνη πάνω και κάτω όπου συμπίπτουν δύο ανεξάρτητες πηγές
+  ΑΚΥΡΩΣΗ     το κλείσιμο 15m που ακυρώνει την πλευρά
+Στέλνει μόνο όταν: αλλάζει το ρίσκο, αλλάζει ή ακυρώνεται η πλευρά, η τιμή φτάνει σε ζώνη.
 
-Πηγές: Basis (Binance order flow, footprint, παράγωγα — δωρεάν, χωρίς κλειδί)
+Πηγές: Basis (Binance order flow, footprint, παράγωγα, ημερολόγιο — δωρεάν, χωρίς κλειδί)
        OKX perp (κεριά, εφεδρικό order flow, open interest, ρευστοποιήσεις)
        Coinbase spot (βιβλίο εντολών) · Deribit (options)
 Αρχή: αριθμός και κατεύθυνση, ποτέ είσοδος.
@@ -26,6 +27,7 @@ PAGE_URL = "https://kostasg9786-cmyk.github.io/pinakas-btc/"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(ROOT, "phylakas_state.json")   # μόνο στη μνήμη cache του workflow, ποτέ στο αποθετήριο
 ALERT = os.path.join(ROOT, "alert.json")             # το καθεστώς του Πίνακα BTC (μόνο ανάγνωση)
+DATA = os.path.join(ROOT, "data.json")               # ο πολλαπλασιαστής ρίσκου του Πίνακα (μόνο ανάγνωση)
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
 BASIS = "https://www.basischarts.com/api/mcp"
 OKX = "https://www.okx.com/api/v5"
@@ -49,8 +51,15 @@ P = {
     "range_atr": 3.0,         # ακραίο: εύρος κεριού 15m σε πολλαπλάσια ATR14
     "wall_btc": 10.0, "wall_mult": 5.0, "wall_near_pct": 0.6, "wall_seen": 3,
     "zg_hyst_pct": 0.2,
+    "zone_merge_pct": 0.3,    # επίπεδα σε απόσταση ≤ 0,3% ενώνονται σε ζώνη
+    "zone_range_pct": 5.0,    # ζώνες μόνο μέσα σε ±5% από την τιμή
+    "zone_touch_pct": 0.1,    # «φτάνει σε ζώνη»: μέσα στη ζώνη ή ≤ 0,1% από τα όριά της
+    "event_before_min": 60,   # γεγονός macro υψηλής επίπτωσης: ρίσκο 0 από 60′ πριν
+    "event_after_min": 30,    # ... έως 30′ μετά
+    "shock_min": 30,          # σοκ: ρίσκο 0 για 30′
+    "side_hours": 4,          # η πλευρά λήγει μετά από 4 ώρες χωρίς νέα επιβεβαίωση
 }
-COOL = {"strong": 120, "liq": 30, "zg": 120, "move": 60, "fail": 360}   # λεπτά
+COOL = {"zone": 120, "fail": 360}   # λεπτά
 
 LOG = []
 def log(m, ok=True): LOG.append(("✓ " if ok else "✗ ") + m)
@@ -406,6 +415,121 @@ def confluence(ev):
     if len(dset) != 1: return None, fam
     return dset.pop(), fam
 
+# ── Κάρτα απόφασης: ρίσκο, πλευρά, ζώνες, ακύρωση ───────────────────────────
+
+def pinakas_regime():
+    """Καθεστώς από τον Πίνακα BTC (μόνο ανάγνωση): κελί, πολλαπλασιαστής ρίσκου, κατεύθυνση."""
+    for path, pick in ((DATA, lambda j: j.get("scores") or {}), (ALERT, lambda j: j)):
+        try:
+            with open(path, encoding="utf-8") as f: s = pick(json.load(f))
+            if s.get("mult") is not None:
+                return {"cell": s.get("cell", ""), "mult": float(s["mult"]), "stance": s.get("stance", "")}
+        except Exception:
+            continue
+    return None
+
+def basis_calendar(B):
+    c = B.call("calendar_upcoming", {"days": 3, "symbol": "BTCUSDT"}, "Basis: ημερολόγιο")
+    out = []
+    for e in (c or {}).get("events") or []:
+        try:
+            out.append({"t": dt.datetime.fromisoformat(e["at"].replace("Z", "+00:00")).timestamp(),
+                        "title": e.get("title", ""), "impact": e.get("impact", ""), "cat": e.get("category", "")})
+        except Exception:
+            continue
+    return out if c else None
+
+def zones(O, closed, walls_state, price):
+    """Ζώνη = επίπεδα από τουλάχιστον δύο διαφορετικά είδη πηγής (options, βιβλίο, δομή)
+    που απέχουν μεταξύ τους ≤ zone_merge_pct. Επιστρέφει την πλησιέστερη πάνω και κάτω."""
+    pts = []
+    if O:
+        if O.get("call_wall"): pts.append((O["call_wall"], "options", "call wall"))
+        if O.get("put_wall"): pts.append((O["put_wall"], "options", "put wall"))
+        if O.get("zg"): pts.append((O["zg"], "options", "zero gamma"))
+        if O.get("maxpain"): pts.append((O["maxpain"]["strike"], "options", f"max pain {O['maxpain']['expiry']}"))
+    if len(closed) >= 97:
+        win = closed[-97:-1]
+        pts.append((max(b["h"] for b in win), "δομή", "υψηλό 24ω"))
+        pts.append((min(b["l"] for b in win), "δομή", "χαμηλό 24ω"))
+    for w in (walls_state or {}).values():
+        if w.get("seen", 0) >= P["wall_seen"]:
+            pts.append((w["at"], "βιβλίο", f"τοίχος {'πωλητών' if w['side']=='ask' else 'αγοραστών'} {n(w['btc'])} BTC"))
+    pts = sorted(p for p in pts if abs(pct(p[0], price)) <= P["zone_range_pct"])
+    groups, cur = [], []
+    for p in pts:
+        if cur and abs(pct(p[0], cur[-1][0])) > P["zone_merge_pct"]:
+            groups.append(cur); cur = []
+        cur.append(p)
+    if cur: groups.append(cur)
+    zs = []
+    for g in groups:
+        kinds = {p[1] for p in g}
+        if len(kinds) < 2: continue
+        labs = []
+        for p in g:
+            if p[2] not in labs: labs.append(p[2])
+        zs.append({"lo": min(p[0] for p in g), "hi": max(p[0] for p in g), "labels": labs, "multi": True})
+    above = next((z for z in zs if z["lo"] > price), None)
+    below = next((z for z in reversed(zs) if z["hi"] < price), None)
+    # Χωρίς ζώνη δύο πηγών: δείχνει το πλησιέστερο μεμονωμένο επίπεδο, δηλωμένο ως μία πηγή
+    if not above:
+        a = next((p for p in pts if p[0] > price), None)
+        if a: above = {"lo": a[0], "hi": a[0], "labels": [a[2]], "multi": False}
+    if not below:
+        b = next((p for p in reversed(pts) if p[0] < price), None)
+        if b: below = {"lo": b[0], "hi": b[0], "labels": [b[2]], "multi": False}
+    inside = next((z for z in zs if z["lo"] * (1 - P["zone_touch_pct"] / 100) <= price <= z["hi"] * (1 + P["zone_touch_pct"] / 100)), None)
+    return above, below, inside
+
+def zone_txt(z):
+    rng = n(z["lo"]) if round(z["lo"]) == round(z["hi"]) else f"{n(z['lo'])}–{n(z['hi'])}"
+    return f"{rng} ({' + '.join(z['labels'])}{'' if z.get('multi', True) else ', μία πηγή'})"
+
+def risk_now(reg, O, price, st, ts):
+    """Ρίσκο ως πολλαπλάσιο του βασικού σου R. Βάση: ο Πίνακας. Μειώσεις: κάτω από zero gamma,
+    γεγονός macro υψηλής επίπτωσης, σοκ (κασκάδα ρευστοποιήσεων ή απότομη κίνηση)."""
+    base = reg["mult"] if reg else None
+    why = [f"Πίνακας ×{n(base, 2).rstrip('0').rstrip(',')}" ] if base is not None else ["Πίνακας: χωρίς ανάγνωση"]
+    val = base if base is not None else 0.5
+    if O and O.get("zg") and st.get("zg_side") == "below":
+        val *= 0.5; why.append(f"κάτω από zero gamma {n(O['zg'])} ×0,5")
+    lock = None
+    for e in st.get("cal") or []:
+        if e["impact"] == "high" and e["cat"] == "macro" and e["t"] - P["event_before_min"] * 60 <= ts <= e["t"] + P["event_after_min"] * 60:
+            lock = (f"{e['title']} {lt(dt.datetime.fromtimestamp(e['t'], dt.timezone.utc))}", e["t"] + P["event_after_min"] * 60); break
+    if not lock and st.get("shock_until", 0) > ts:
+        lock = (st.get("shock_why", "σοκ"), st["shock_until"])
+    if lock:
+        val = 0.0; why.append(f"{lock[0]} → όχι νέο trade ως {lt(dt.datetime.fromtimestamp(lock[1], dt.timezone.utc))}")
+    return round(val, 3), why
+
+def rtxt(v):
+    return "0 (όχι νέο trade)" if v == 0 else "×" + n(v, 3).rstrip("0").rstrip(",") + " του βασικού σου R"
+
+def next_event(st, ts):
+    ev = [e for e in st.get("cal") or [] if e["impact"] == "high" and e["t"] > ts]
+    return min(ev, key=lambda e: e["t"]) if ev else None
+
+def card(head, why, price, risk, rwhy, side, above, below, reg, st, ts, now):
+    p = [f"Φρουρός BTC — {lt(now)}", head]
+    if why: p += ["Γιατί: " + w for w in why]
+    p += ["", f"ΡΙΣΚΟ: {rtxt(risk)}" + (f" — {' · '.join(rwhy)}" if rwhy else "")]
+    if side:
+        p.append(f"ΠΛΕΥΡΑ: {'ΚΑΘΟΔΙΚΗ' if side['dir']=='down' else 'ΑΝΟΔΙΚΗ'} από {lt(dt.datetime.fromtimestamp(side['since'], dt.timezone.utc))} ({side['why']})")
+        p.append(f"ΑΚΥΡΩΝΕΤΑΙ: 15m κλείσιμο {'πάνω' if side['dir']=='down' else 'κάτω'} από {n(side['inval'])}")
+    else:
+        p.append("ΠΛΕΥΡΑ: καμία ενδοημερήσια ένδειξη — ισχύει η κατεύθυνση του Πίνακα")
+    zl = []
+    if above: zl.append("πάνω " + zone_txt(above))
+    if below: zl.append("κάτω " + zone_txt(below))
+    p.append("ΖΩΝΕΣ: " + (" · ".join(zl) if zl else "κανένα επίπεδο μέσα σε ±5%"))
+    if reg: p.append(f"ΠΙΝΑΚΑΣ: {reg['cell']} — {reg['stance']}")
+    e = next_event(st, ts)
+    if e: p.append(f"ΕΠΟΜΕΝΟ ΓΕΓΟΝΟΣ: {e['title']} {lt(dt.datetime.fromtimestamp(e['t'], dt.timezone.utc))}")
+    p += ["", f"Τιμή {n(price)} (OKX perp) · αριθμός και κατεύθυνση, όχι είσοδος.", PAGE_URL]
+    return "\n".join(p)
+
 # ── Μηνύματα ──────────────────────────────────────────────────────────────────
 
 def tg_ready():
@@ -421,38 +545,6 @@ def tg_send(text, label):
     except Exception as e:
         log(f"{label} — {type(e).__name__}", False); return False   # ποτέ το κείμενο του σφάλματος: περιέχει το κλειδί
 
-def regime():
-    try:
-        with open(ALERT, encoding="utf-8") as f: a = json.load(f)
-        return f"{a.get('cell','')} · {a.get('stance','')}".strip(" ·")
-    except Exception:
-        return None
-
-def context(price, O, W, wsrc, deriv):
-    p = [f"Τιμή {n(price)} (OKX perp)"]
-    r = regime()
-    if r: p.append(f"Πίνακας BTC: {r}")
-    if O:
-        b = []
-        if O.get("zg"): b.append(f"zero gamma {n(O['zg'])} ({'πάνω' if price > O['zg'] else 'κάτω'} του)")
-        if O.get("call_wall"): b.append(f"call wall {n(O['call_wall'])}")
-        if O.get("put_wall"): b.append(f"put wall {n(O['put_wall'])}")
-        if O.get("maxpain"): b.append(f"max pain {n(O['maxpain']['strike'])} ({O['maxpain']['expiry']})")
-        if b: p.append("Options (Deribit): " + " · ".join(b))
-    if W:
-        bw = next((w for w in W if w["side"] == "bid"), None); aw = next((w for w in W if w["side"] == "ask"), None)
-        b = ([f"αγοραστές {n(bw['at'])} ({n(bw['btc'])} BTC)"] if bw else []) + ([f"πωλητές {n(aw['at'])} ({n(aw['btc'])} BTC)"] if aw else [])
-        if b: p.append(f"Τοίχοι ({wsrc}): " + " · ".join(b))
-    if deriv:
-        try:
-            f = deriv["funding"]["annualisedPercent"]; tt = deriv.get("topTraderRatio")
-            p.append(f"Binance (Basis): funding {sgn(f)}% ετήσια" + (f" · top traders {n(tt,2)} long/short" if tt else ""))
-        except Exception:
-            pass
-    return p
-
-FOOT = ["", "Αριθμός και κατεύθυνση, όχι είσοδος.", PAGE_URL]
-
 # ── Κύριο ─────────────────────────────────────────────────────────────────────
 
 def load_state():
@@ -461,9 +553,12 @@ def load_state():
     except Exception:
         return {}
 
+def save(st):
+    with open(STATE, "w", encoding="utf-8") as f: json.dump(st, f, ensure_ascii=False)
+
 def main():
     now = dt.datetime.now(dt.timezone.utc); ts = now.timestamp()
-    st = load_state(); first = not st
+    st = load_state(); upgrade = st.get("ver") != 2
     for k, v in (("cool", {}), ("ev", []), ("dhist", {}), ("walls", {}), ("fails", 0)): st.setdefault(k, v)
 
     closed, live = okx_candles()
@@ -471,27 +566,36 @@ def main():
     last_t = closed[-1]["t"] if closed else None
     new_bar = last_t is not None and st.get("bar_t") != last_t
 
-    B = Basis(); bz = basis_read(B, last_t if new_bar else None) if B.start() else {}
-    for t, v in (bz.get("delta") or {}).items(): st["dhist"][str(t)] = v
-    st["dhist"] = dict(sorted(st["dhist"].items())[-120:])
-    oi = okx_oi(); liq = okx_liqs()
-    bids, asks, wsrc = book()
-    O = None
-    try:
-        rows = parse_options(deribit_options(), now)
-        if rows and price: O = options_levels(rows, price)
-    except Exception as e:
-        log(f"options: υπολογισμός — {type(e).__name__} {str(e)[:60]}", False)
-
     if not price:
         st["fails"] += 1
-        if tg_ready() and ts - st["cool"].get("fail", 0) >= COOL["fail"] * 60 and st["fails"] >= 6:
+        if tg_ready() and st["fails"] >= 6 and ts - st["cool"].get("fail", 0) >= COOL["fail"] * 60:
             tg_send(f"Φρουρός BTC — {lt(now)}\nΗ πηγή τιμής δεν απαντά για 30′. Η επιτήρηση είναι σε παύση.", "telegram: βλάβη")
             st["cool"]["fail"] = ts
         save(st); print("\n".join(LOG)); return
     st["fails"] = 0
 
-    # Στοιχεία
+    # Πηγές που αλλάζουν αργά: μόνο σε νέο κερί 15m (όριο Basis 1.000 κλήσεις/ημέρα χωρίς κλειδί)
+    bz = {}
+    if new_bar or upgrade:
+        B = Basis()
+        if B.start():
+            bz = basis_read(B, last_t)
+            cal = basis_calendar(B)
+            if cal is not None: st["cal"] = cal
+            if bz.get("deriv"): st["deriv"] = bz["deriv"]
+        for t, v in (bz.get("delta") or {}).items(): st["dhist"][str(t)] = v
+        st["dhist"] = dict(sorted(st["dhist"].items())[-120:])
+        try:
+            rows = parse_options(deribit_options(), now)
+            if rows: st["O"] = options_levels(rows, price)
+        except Exception as e:
+            log(f"options: υπολογισμός — {type(e).__name__} {str(e)[:60]}", False)
+    O = st.get("O")
+    oi = okx_oi(); liq = okx_liqs()
+    bids, asks, wsrc = book()
+    reg = pinakas_regime()
+
+    # Στοιχεία ανά οικογένεια (ίδιοι κανόνες με την αναθεώρηση 1)
     new_ev = []
     if new_bar:
         dB = {int(t): v for t, v in st["dhist"].items()}
@@ -500,7 +604,6 @@ def main():
         else:
             new_ev += orderflow_evidence(closed, okx_taker(), "OKX")
         new_ev += footprint_evidence(bz.get("of"), closed[-1], closed)
-        st["bar_t"] = last_t
     new_ev += leverage_evidence(oi, closed, liq)
     W = walls(bids, asks, price) if bids and asks else []
     hi = live["h"] if live else price; lo = live["l"] if live else price
@@ -512,68 +615,94 @@ def main():
         if key not in keys: st["ev"].append({"fam": fam, "key": key, "dir": d, "txt": txt, "ts": ts})
     st["ev"] = [e for e in st["ev"] if ts - e["ts"] <= P["window_min"] * 60]
 
-    msgs = []
-    # 1. Ισχυρή ένδειξη: επίπεδο + συρροή
-    near = at_level(levels(O, closed, st["walls"]), price, closed)
-    d, fam = confluence(st["ev"])
-    if near and d:
-        key, px, lab = near[0]
-        ck = f"strong:{key}:{round(px)}:{d}"
-        if ts - st["cool"].get(ck, 0) >= COOL["strong"] * 60:
-            inv = (f"15m κλείσιμο πάνω από {n(px)} με θετικό delta" if d == "down" else f"15m κλείσιμο κάτω από {n(px)} με αρνητικό delta")
-            body = [f"ΙΣΧΥΡΗ ΕΝΔΕΙΞΗ — {lt(now)}", f"Επίπεδο: {lab} {n(px)}",
-                    f"Κατεύθυνση που δείχνουν τα στοιχεία: {'ΚΑΘΟΔΙΚΗ' if d=='down' else 'ΑΝΟΔΙΚΗ'} ({len(fam)} ανεξάρτητες οικογένειες)"]
-            body += ["• " + e["txt"] for f in ("flow", "lev", "book") for e in fam.get(f, [])]
-            body += [f"Ακυρώνεται με: {inv}."]
-            msgs.append(body); st["cool"][ck] = ts
-    # 2. Ακραία γεγονότα
-    ext = []
+    heads = []   # (τίτλος, [γιατί]) για κάθε αλλαγή αυτής της ανάγνωσης
+
+    # Σοκ: κασκάδα ρευστοποιήσεων ή απότομη κίνηση → ρίσκο 0 για shock_min λεπτά
+    shock = []
     if liq:
-        for side, v in (("long", liq[0]), ("short", liq[1])):
-            if v >= P["liq_extreme_usd"] and ts - st["cool"].get("liq:" + side, 0) >= COOL["liq"] * 60:
-                ext.append(f"Κασκάδα ρευστοποιήσεων {side}: ${n(v/1e6,1)} εκ. σε 15′ (OKX) — αναγκαστικές {'πωλήσεις' if side=='long' else 'αγορές'}.")
-                st["cool"]["liq:" + side] = ts
-    if O and O.get("zg"):
-        zg = O["zg"]; h = P["zg_hyst_pct"] / 100
-        side = "above" if price > zg * (1 + h) else "below" if price < zg * (1 - h) else st.get("zg_side")
-        if st.get("zg_side") and side and side != st["zg_side"] and ts - st["cool"].get("zg", 0) >= COOL["zg"] * 60:
-            ext.append(f"Η τιμή πέρασε {'κάτω' if side=='below' else 'πάνω'} από το zero gamma ({n(zg)}). " +
-                       ("Το hedging των dealers τώρα ενισχύει τις κινήσεις: μεγαλύτερο εύρος, πιο βίαια σπασίματα."
-                        if side == "below" else "Το hedging των dealers τώρα φρενάρει τις κινήσεις: η αγορά τείνει σε εύρος."))
-            st["cool"]["zg"] = ts
-        st["zg_side"] = side
+        for side_, v in (("long", liq[0]), ("short", liq[1])):
+            if v >= P["liq_extreme_usd"]:
+                shock.append(f"κασκάδα ρευστοποιήσεων {side_} ${n(v/1e6,1)} εκ. σε 15′ (OKX) — αναγκαστικές {'πωλήσεις' if side_=='long' else 'αγορές'}")
     if len(closed) >= 20:
         m1 = pct(price, closed[-4]["o"])
         tr = [max(b["h"] - b["l"], abs(b["h"] - a["c"]), abs(b["l"] - a["c"])) for a, b in zip(closed, closed[1:])]
         atr = statistics.fmean(tr[-14:]); rng = closed[-1]["h"] - closed[-1]["l"]
-        if ts - st["cool"].get("move", 0) >= COOL["move"] * 60:
-            if abs(m1) >= P["move_1h_pct"]:
-                ext.append(f"Απότομη κίνηση: {sgn(m1)}% σε μία ώρα."); st["cool"]["move"] = ts
-            elif new_bar and atr and rng >= P["range_atr"] * atr:
-                ext.append(f"Κερί 15m με εύρος {n(rng)} μονάδες, {n(rng/atr,1)}× το κανονικό (ATR14)."); st["cool"]["move"] = ts
-    if ext: msgs.append([f"ΑΚΡΑΙΟ ΓΕΓΟΝΟΣ — {lt(now)}"] + ["• " + e for e in ext])
+        if abs(m1) >= P["move_1h_pct"]: shock.append(f"απότομη κίνηση {sgn(m1)}% σε μία ώρα")
+        elif new_bar and atr and rng >= P["range_atr"] * atr: shock.append(f"κερί 15m με εύρος {n(rng)} μονάδες, {n(rng/atr,1)}× το κανονικό (ATR14)")
+    if shock and st.get("shock_until", 0) <= ts:
+        st["shock_until"] = ts + P["shock_min"] * 60; st["shock_why"] = shock[0]
+
+    # Zero gamma με περιθώριο, ώστε να μην αλλάζει σε κάθε ταλάντωση
+    if O and O.get("zg"):
+        h = P["zg_hyst_pct"] / 100
+        side_zg = "above" if price > O["zg"] * (1 + h) else "below" if price < O["zg"] * (1 - h) else st.get("zg_side")
+        st["zg_side"] = side_zg
+
+    # 1. ΡΙΣΚΟ
+    risk, rwhy = risk_now(reg, O, price, st, ts)
+    prev = st.get("card") or {}
+    if not upgrade and prev.get("risk") is not None and risk != prev["risk"]:
+        w = [shock[0]] if shock and risk == 0 else []
+        heads.append((f"ΑΛΛΑΞΕ ΤΟ ΡΙΣΚΟ: {rtxt(prev['risk'])} → {rtxt(risk)}", w))
+
+    # 2. ΠΛΕΥΡΑ: νέα ισχυρή ένδειξη, ακύρωση ή λήξη
+    side = st.get("side")
+    if side and new_bar:
+        c = closed[-1]["c"]
+        if (side["dir"] == "down" and c > side["inval"]) or (side["dir"] == "up" and c < side["inval"]):
+            heads.append((f"ΑΚΥΡΩΘΗΚΕ Η {'ΚΑΘΟΔΙΚΗ' if side['dir']=='down' else 'ΑΝΟΔΙΚΗ'} ΕΝΔΕΙΞΗ",
+                          [f"15m κλείσιμο {n(c)} {'πάνω' if side['dir']=='down' else 'κάτω'} από {n(side['inval'])}"]))
+            # Τα στοιχεία που έχτισαν την πλευρά καταναλώθηκαν: νέα ένδειξη χρειάζεται νέα στοιχεία
+            st["ev"] = [e for e in st["ev"] if e["dir"] != side["dir"]]
+            side = None
+    if side and ts > side["until"]: side = None
+    near = at_level(levels(O, closed, st["walls"]), price, closed)
+    d, fam = confluence(st["ev"])
+    if near and d:
+        key, px, lab = near[0]
+        if not side or side["dir"] != d:
+            fams = {"flow": "order flow", "lev": "μόχλευση", "book": "ρευστότητα"}
+            side = {"dir": d, "since": ts, "until": ts + P["side_hours"] * 3600, "inval": px,
+                    "why": " + ".join(fams[f] for f in ("flow", "lev", "book") if f in fam) + f" στο {lab} {n(px)}"}
+            heads.append((f"ΝΕΑ ΕΝΔΕΙΞΗ: {'ΚΑΘΟΔΙΚΗ' if d=='down' else 'ΑΝΟΔΙΚΗ'} ΠΛΕΥΡΑ",
+                          [e["txt"] for f in ("flow", "lev", "book") for e in fam.get(f, [])]))
+        else:
+            side["until"] = ts + P["side_hours"] * 3600
+    st["side"] = side
+
+    # 3. ΖΩΝΕΣ: η τιμή φτάνει σε ζώνη δύο ανεξάρτητων πηγών
+    above, below, inside = zones(O, closed, st["walls"], price)
+    if inside and not upgrade:
+        zk = "zone:" + str(round((inside["lo"] + inside["hi"]) / 2, -2))
+        if ts - st["cool"].get(zk, 0) >= COOL["zone"] * 60:
+            heads.append((f"Η ΤΙΜΗ ΦΤΑΝΕΙ ΣΕ ΖΩΝΗ: {zone_txt(inside)}",
+                          [e["txt"] for e in st["ev"]] or ["Χωρίς στοιχείο order flow, μόχλευσης ή ρευστότητας τα τελευταία 30′."]))
+            st["cool"][zk] = ts
     st["cool"] = {k: v for k, v in st["cool"].items() if ts - v < 86400}
 
-    ctx = context(price, O, W, wsrc, bz.get("deriv"))
-    if tg_ready():
-        if first:
-            ok = [l[2:].split(" —")[0] for l in LOG if l.startswith("✓")]
-            bad = [l[2:] for l in LOG if l.startswith("✗")]
-            tg_send("\n".join([f"Φρουρός BTC — ενεργός ({lt(now)})",
-                               "Ελέγχω κάθε 5 λεπτά. Γράφω μόνο σε ΙΣΧΥΡΗ ΕΝΔΕΙΞΗ (επίπεδο + 2 ανεξάρτητες οικογένειες στοιχείων) ή σε ΑΚΡΑΙΟ ΓΕΓΟΝΟΣ.", ""]
-                              + ctx + ["", f"Πηγές που απάντησαν: {len(set(ok))}" + (f" · δεν απάντησαν: {'; '.join(bad)[:500]}" if bad else " · όλες")] + FOOT),
-                    "telegram: έναρξη")
-        for m in msgs:
-            tg_send("\n".join(m + [""] + ctx + FOOT), "telegram: " + m[0].split(" —")[0].lower())
-    st["last"] = {"t": now.isoformat(timespec="seconds"), "price": price, "options": O and {k: O[k] for k in ("net", "zg", "call_wall", "put_wall", "maxpain")},
-                  "evidence": [e["txt"] for e in st["ev"]], "sent": [m[0] for m in msgs]}
-    save(st)
-    print(f"τιμή {price} | στοιχεία 30′: {len(st['ev'])} | μηνύματα: {[m[0] for m in msgs] or '—'}")
-    if O: print(f"options: net GEX {O['net']/1e6:.1f}M · zero gamma {O['zg'] and round(O['zg'])} · call wall {O['call_wall']} · put wall {O['put_wall']} · max pain {O['maxpain']}")
-    print("\n".join(ctx)); print("\n".join(LOG))
+    msgs = []
+    if upgrade:
+        msgs.append(card("Νέα μορφή: γράφω μόνο όταν αλλάζει το ρίσκο, η πλευρά, ή όταν η τιμή φτάνει σε ζώνη.",
+                         [], price, risk, rwhy, side, above, below, reg, st, ts, now))
+    elif heads:
+        head = heads[0][0] if len(heads) == 1 else " · ".join(h[0] for h in heads)
+        why = [w for h in heads for w in h[1]]
+        msgs.append(card(head, why, price, risk, rwhy, side, above, below, reg, st, ts, now))
 
-def save(st):
-    with open(STATE, "w", encoding="utf-8") as f: json.dump(st, f, ensure_ascii=False)
+    if tg_ready():
+        for m in msgs: tg_send(m, "telegram: κάρτα")
+    if new_bar: st["bar_t"] = last_t
+    st["card"] = {"risk": risk, "side": side and side["dir"]}
+    st["ver"] = 2
+    st["last"] = {"t": now.isoformat(timespec="seconds"), "price": price, "risk": risk,
+                  "options": O and {k: O.get(k) for k in ("net", "zg", "call_wall", "put_wall", "maxpain")},
+                  "evidence": [e["txt"] for e in st["ev"]], "sent": len(msgs)}
+    save(st)
+    print(f"τιμή {price} | ρίσκο {risk} | πλευρά {side and side['dir']} | στοιχεία 30′: {len(st['ev'])} | μηνύματα: {len(msgs)}")
+    if O: print(f"options: net GEX {O['net']/1e6:.1f}M · zero gamma {O['zg'] and round(O['zg'])} · call wall {O['call_wall']} · put wall {O['put_wall']} · max pain {O['maxpain']}")
+    print("ζώνες:", above and zone_txt(above), "|", below and zone_txt(below), "| μέσα:", inside and zone_txt(inside))
+    for m in msgs: print("----- μήνυμα -----\n" + m)
+    print("\n".join(LOG))
 
 if __name__ == "__main__":
     main()
